@@ -13,6 +13,8 @@ from typing import Optional
 from report import OutputFormat
 from scan import scan_project
 from outputs import export_report
+import subprocess
+import sys
 from config import ConfigManager
 
 class ExportApp(Tk):
@@ -62,7 +64,7 @@ class ExportApp(Tk):
     def _setup_ui(self) -> None:
         """Setup the complete user interface"""
         pad = dict(padx=15, pady=6)
-        
+
         # Create main container with scrollable frame
         main_frame = ttk.Frame(self)
         main_frame.pack(fill="both", expand=True, padx=pad["padx"], pady=pad["pady"])
@@ -70,16 +72,16 @@ class ExportApp(Tk):
         # Header
         header_frame = ttk.LabelFrame(main_frame, text="Project Selection", padding=8)
         header_frame.pack(fill="x", pady=(0, 8))
-        
+
         # Folder selection row
         folder_frame = ttk.Frame(header_frame)
         folder_frame.pack(fill="x", pady=5)
-        
+
         ttk.Label(folder_frame, text="Project folder:").pack(side="left", anchor="w")
         self.path_label = ttk.Label(folder_frame, text="No folder selected", 
                                    relief="sunken", width=50, anchor="w")
         self.path_label.pack(side="left", padx=(10, 10), fill="x", expand=True)
-        
+
         self.browse_btn = ttk.Button(folder_frame, text="Browse", 
                                     command=self.on_browse)
         self.browse_btn.pack(side="right")
@@ -96,22 +98,22 @@ class ExportApp(Tk):
         # Output format row
         format_frame = ttk.Frame(options_frame)
         format_frame.pack(fill="x", pady=5)
-        
+
         ttk.Label(format_frame, text="Output format:").pack(side="left")
         self.combo = ttk.Combobox(format_frame, textvariable=self.fmt_var, 
                                  state="readonly", width=30,
                                  values=[f.value for f in OutputFormat])
         self.combo.pack(side="left", padx=(10, 0))
-        
+
         # Content inclusion checkbox
         content_frame = ttk.Frame(options_frame)
         content_frame.pack(fill="x", pady=5)
-        
+
         self.content_check = ttk.Checkbutton(content_frame, 
                                            text="Include file contents in export", 
                                            variable=self.include_var)
         self.content_check.pack(side="left")
-        
+
         # Help text
         help_text = ttk.Label(options_frame, 
                              text="💡 Tip: Including contents creates detailed reports but larger files",
@@ -121,15 +123,15 @@ class ExportApp(Tk):
         # Save destination section
         save_frame = ttk.LabelFrame(main_frame, text="Save Destination", padding=8)
         save_frame.pack(fill="x", pady=(0, 8))
-        
+
         dest_frame = ttk.Frame(save_frame)
         dest_frame.pack(fill="x", pady=5)
-        
+
         ttk.Label(dest_frame, text="Save as:").pack(side="left")
         self.save_label = ttk.Label(dest_frame, text="Choose destination file...", 
                                    relief="sunken", width=50, anchor="w")
         self.save_label.pack(side="left", padx=(10, 10), fill="x", expand=True)
-        
+
         self.choose_btn = ttk.Button(dest_frame, text="Choose File...", 
                                     command=self.on_choose_save, state="disabled")
         self.choose_btn.pack(side="right")
@@ -137,11 +139,11 @@ class ExportApp(Tk):
         # Progress section
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding=8)
         progress_frame.pack(fill="x", pady=(0, 8))
-        
+
         # Progress bar
         self.progress = ttk.Progressbar(progress_frame, mode="indeterminate")
         self.progress.pack(fill="x", pady=(0, 5))
-        
+
         # Status label
         self.status_label = ttk.Label(progress_frame, textvariable=self.status_var)
         self.status_label.pack(anchor="w")
@@ -149,15 +151,57 @@ class ExportApp(Tk):
         # Action buttons
         action_frame = ttk.Frame(main_frame)
         action_frame.pack(fill="x", pady=(10, 10))
-        
+
         # Right-aligned button frame
         button_frame = ttk.Frame(action_frame)
         button_frame.pack(side="right")
-        
-        ttk.Button(button_frame, text="Quit", command=self.on_quit).pack(side="right", padx=(10, 0))
+
+        self.quit_btn = ttk.Button(button_frame, text="Quit", command=self.on_quit)
+        self.quit_btn.pack(side="right", padx=(10, 0))
+
         self.export_btn = ttk.Button(button_frame, text="Start Export", 
-                                    command=self.on_export, state="disabled")
+                command=self.on_export, state="disabled")
         self.export_btn.pack(side="right", padx=(0, 10))
+
+        # Recover button
+        self.recover_btn = ttk.Button(button_frame, text="Recover Project", command=self.on_recover)
+        self.recover_btn.pack(side="right", padx=(0, 10))
+    def on_recover(self) -> None:
+        """Handle recovery of files from a report file via recover.py"""
+        # Ask user to select a report file
+        report_path = filedialog.askopenfilename(
+            title="Select Report File to Recover From",
+            filetypes=[
+                ("Report Files", "*.md *.txt *.html *.json"),
+                ("All Files", "*.*")
+            ]
+        )
+        if not report_path:
+            return
+        # Ask user for output directory
+        output_dir = filedialog.askdirectory(
+            title="Select Output Directory for Recovery (will create subfolder)",
+        )
+        if not output_dir:
+            return
+        self.status_var.set("Recovering project from report... (see terminal for details)")
+
+        def run_recover():
+            try:
+                # Run recover.py as a subprocess so it works even if run as packaged app
+                cmd = [sys.executable, "recover.py", report_path, output_dir]
+                result = subprocess.run(cmd, cwd=os.path.dirname(__file__), capture_output=True, text=True)
+                if result.returncode == 0:
+                    self.status_var.set("Recovery complete. See output directory.")
+                    messagebox.showinfo("Recovery Complete", f"Project recovered to: {output_dir}")
+                else:
+                    self.status_var.set("Recovery failed. See terminal for details.")
+                    messagebox.showerror("Recovery Failed", result.stderr or result.stdout)
+            except Exception as e:
+                self.status_var.set("Recovery failed.")
+                messagebox.showerror("Recovery Failed", str(e))
+
+        threading.Thread(target=run_recover, daemon=True).start()
         
         # Bind format change event
         self.combo.bind('<<ComboboxSelected>>', self.on_format_changed)
