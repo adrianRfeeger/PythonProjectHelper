@@ -146,8 +146,33 @@ def render_plaintext(report: ProjectReport, include_contents: bool = False) -> s
     print(f"  Total Size: {format_size(total_size)}", file=buf)
     print("", file=buf)
     
-    print("FILE LISTING:", file=buf)
-    print("-" * 60, file=buf)
+    buf = io.StringIO()
+
+    def _print(line=""):
+        # Always use LF endings, strip trailing whitespace
+        buf.write(str(line).rstrip() + "\n")
+
+    _print("=" * 60)
+    _print(f"PROJECT STRUCTURE REPORT")
+    _print("=" * 60)
+    _print(f"Project: {Path(report.root).name}")
+    _print(f"Generated: {report.generated_at}")
+    _print(f"Root Path: {report.root}")
+    _print()
+
+    # Summary
+    total_files = len(report.files)
+    total_size = sum(f.size_bytes for f in report.files)
+    text_files = sum(1 for f in report.files if f.content is not None)
+
+    _print("SUMMARY:")
+    _print(f"  Total Files: {total_files:,}")
+    _print(f"  Text Files: {text_files:,}")
+    _print(f"  Total Size: {format_size(total_size)}")
+    _print()
+
+    _print("FILE LISTING:")
+    _print("-" * 60)
 
     # Tree structure for plaintext
     from collections import defaultdict
@@ -161,98 +186,56 @@ def render_plaintext(report: ProjectReport, include_contents: bool = False) -> s
             node.setdefault("__files__", []).append(fi)
         return tree
 
-    def render_tree(node, prefix=""):
+    def render_tree(node, prefix_stack=None, level=0, is_last_dir=False):
+        if prefix_stack is None:
+            prefix_stack = []
         out = []
-        for key in sorted(k for k in node.keys() if k != "__files__"):
-            out.append(f"{prefix}{key}/")
-            out.extend(render_tree(node[key], prefix + "    "))
-        for fi in sorted(node.get("__files__", []), key=lambda f: f.path):
+        keys = sorted(k for k in node.keys() if k != "__files__")
+        n_keys = len(keys)
+        for i, key in enumerate(keys):
+            is_last = (i == n_keys - 1 and not node.get("__files__"))
+            prefix = "".join(["│   " if draw else "    " for draw in prefix_stack])
+            branch = "└── " if is_last else "├── "
+            out.append(f"{prefix}{branch}📁 {key}/")
+            out.extend(render_tree(node[key], prefix_stack + [not is_last], level+1, is_last))
+        files = sorted(node.get("__files__", []), key=lambda f: f.path)
+        n_files = len(files)
+        for j, fi in enumerate(files):
+            is_last_file = (j == n_files - 1)
+            prefix = "".join(["│   " if draw else "    " for draw in prefix_stack])
+            branch = "└── " if is_last_file else "├── "
             size = format_size(fi.size_bytes)
             lines_str = str(fi.lines) if fi.lines != "?" else "—"
             words_str = str(fi.words) if fi.words != "?" else "—"
-            out.append(f"{prefix}- {Path(fi.path).name} [{size}, {lines_str} lines, {words_str} words, {fi.mtime_iso}]")
+            ext = Path(fi.path).suffix.lower()
+            emoji = _get_file_emoji(ext)
+            meta = f"{size}, {lines_str} lines, {words_str} words, modified {fi.mtime_iso}"
+            out.append(f"{prefix}{branch}{emoji} {Path(fi.path).name} [{meta}]")
         return out
 
     tree = build_tree(report.files)
-    for line in render_tree(tree):
-        print(line, file=buf)
-    
+    tree_lines = render_tree(tree)
+    for line in tree_lines:
+        _print(line)
+
     if include_contents:
-        print("\n" + "=" * 60, file=buf)
-        print("FILE CONTENTS", file=buf)
-        print("=" * 60, file=buf)
-        
+        _print()
+        _print("=" * 60)
+        _print("FILE CONTENTS")
+        _print("=" * 60)
         for fi in report.files:
             if fi.content is None:
                 continue
-                
-            print(f"\n--- {fi.path} ---", file=buf)
-            print(f"Size: {format_size(fi.size_bytes)} | Lines: {fi.lines} | Words: {fi.words}", file=buf)
-            print(f"Modified: {fi.mtime_iso}", file=buf)
-            print("-" * 40, file=buf)
-            print(fi.content, file=buf)
-    
-    return buf.getvalue()
+            _print(f"\n--- {fi.path} ---")
+            _print(f"Size: {format_size(fi.size_bytes)} | Lines: {fi.lines} | Words: {fi.words}")
+            _print(f"Modified: {fi.mtime_iso}")
+            _print("-" * 40)
+            # Write file content, normalize to LF, strip trailing whitespace
+            for line in (fi.content or '').splitlines():
+                _print(line)
 
-def render_html(report: ProjectReport, include_contents: bool = True) -> str:
-    """Render project report as HTML with modern styling"""
-    def esc(s: str) -> str:
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    
-    root_name = esc(Path(report.root).name)
-    
-    # Enhanced CSS styling
-    css = """
-    <style>
-    body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, Arial, sans-serif;
-        line-height: 1.6;
-        margin: 0;
-        padding: 2rem;
-        background: #fafafa;
-        color: #333;
-    }
-    .container {
-        max-width: 1200px;
-        margin: 0 auto;
-        background: white;
-        border-radius: 8px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        padding: 2rem;
-    }
-    h1 { margin-top: 0; color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 0.5rem; }
-    h2 { color: #1f2937; margin-top: 2rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25rem; }
-    h3 { color: #374151; margin-top: 1.5rem; }
-    .meta { color: #6b7280; font-size: 0.9rem; margin-bottom: 1rem; }
-    .summary { background: #f3f4f6; padding: 1rem; border-radius: 6px; margin: 1rem 0; }
-    .file-list { list-style: none; padding: 0; }
-    .file-item { 
-        padding: 0.5rem; 
-        margin: 0.25rem 0; 
-        background: #f9fafb; 
-        border-left: 3px solid #10b981; 
-        border-radius: 4px; 
-    }
-    .file-meta { font-size: 0.85rem; color: #6b7280; margin-left: 1rem; }
-    pre { 
-        background: #1f2937; 
-        color: #f9fafb; 
-        border-radius: 6px; 
-        padding: 1rem; 
-        overflow-x: auto; 
-        margin: 1rem 0;
-    }
-    code { font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; }
-    .content-header { 
-        background: #eff6ff; 
-        padding: 0.75rem; 
-        border-radius: 6px; 
-        margin: 1rem 0 0.5rem 0; 
-        border-left: 4px solid #3b82f6;
-    }
-    hr { border: none; border-top: 1px solid #e5e7eb; margin: 2rem 0; }
-    </style>
-    """
+    # Always return with LF endings
+    return buf.getvalue().replace('\r\n', '\n').replace('\r', '\n')
     
     head = f"""<!DOCTYPE html>
 <html lang="en">
@@ -426,10 +409,115 @@ def export_report(report: ProjectReport, fmt: OutputFormat, include_contents: bo
             
         elif fmt.name == "PLAINTEXT":
             text = render_plaintext(report, include_contents)
-            save_path.write_text(text, encoding="utf-8")
+            # Write as UTF-8 without BOM, force LF endings
+            with open(save_path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(text)
             
         elif fmt.name == "HTML":
-            text = render_html(report, include_contents)
+            # Inline HTML rendering logic (copied from the HTML section above)
+            def esc(s):
+                return (str(s)
+                        .replace('&', '&amp;')
+                        .replace('<', '&lt;')
+                        .replace('>', '&gt;')
+                        .replace('"', '&quot;')
+                        .replace("'", '&#39;'))
+
+            root_name = Path(report.root).name
+            css = """
+            <style>
+            body { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; background: #f9fafb; color: #222; margin: 0; padding: 0; }
+            .container { max-width: 900px; margin: 2rem auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px #0001; padding: 2rem; }
+            h1, h2, h3 { color: #2563eb; }
+            pre { background: #1f2937; color: #f9fafb; border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+            code { font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace; }
+            .content-header { background: #eff6ff; padding: 0.75rem; border-radius: 6px; margin: 1rem 0 0.5rem 0; border-left: 4px solid #3b82f6; }
+            hr { border: none; border-top: 1px solid #e5e7eb; margin: 2rem 0; }
+            </style>
+            """
+            head = f"""<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"utf-8\">
+    <title>Project Structure: {root_name}</title>
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    {css}
+</head>
+<body>
+<div class=\"container\">"""
+            out = [
+                head,
+                f"<h1>📁 Project Structure: {root_name}</h1>",
+                f'<div class="meta">Generated: {esc(report.generated_at)} | Root: <code>{esc(report.root)}</code></div>'
+            ]
+            total_files = len(report.files)
+            total_size = sum(f.size_bytes for f in report.files)
+            text_files = sum(1 for f in report.files if f.content is not None)
+            out.extend([
+                '<div class="summary">',
+                '<h2>📊 Summary</h2>',
+                f'<p><strong>Total Files:</strong> {total_files:,}<br>',
+                f'<strong>Text Files:</strong> {text_files:,}<br>',
+                f'<strong>Total Size:</strong> {esc(format_size(total_size))}</p>',
+                '</div>'
+            ])
+            out.append('<h2>📁 File Listing</h2>')
+            def build_tree(files):
+                tree = {}
+                for fi in files:
+                    parts = fi.path.split("/")
+                    node = tree
+                    for part in parts[:-1]:
+                        node = node.setdefault(part, {})
+                    node.setdefault("__files__", []).append(fi)
+                return tree
+            def render_ascii_tree(node, prefix_stack=None, level=0, is_last_dir=False):
+                if prefix_stack is None:
+                    prefix_stack = []
+                out = []
+                keys = sorted(k for k in node.keys() if k != "__files__")
+                n_keys = len(keys)
+                for i, key in enumerate(keys):
+                    is_last = (i == n_keys - 1 and not node.get("__files__"))
+                    prefix = ""
+                    for draw in prefix_stack:
+                        prefix += ("│   " if draw else "    ")
+                    branch = "└── " if is_last else "├── "
+                    out.append(f"{prefix}{branch}📁 {esc(key)}/")
+                    out.extend(render_ascii_tree(node[key], prefix_stack + [not is_last], level+1, is_last))
+                files = sorted(node.get("__files__", []), key=lambda f: f.path)
+                n_files = len(files)
+                for j, fi in enumerate(files):
+                    is_last_file = (j == n_files - 1)
+                    prefix = ""
+                    for draw in prefix_stack:
+                        prefix += ("│   " if draw else "    ")
+                    branch = "└── " if is_last_file else "├── "
+                    size = format_size(fi.size_bytes)
+                    lines_str = str(fi.lines) if fi.lines != "?" else "—"
+                    words_str = str(fi.words) if fi.words != "?" else "—"
+                    ext = Path(fi.path).suffix.lower()
+                    emoji = _get_file_emoji(ext)
+                    meta = f"{size}, {lines_str} lines, {words_str} words, modified {fi.mtime_iso}"
+                    out.append(f"{prefix}{branch}{emoji} {esc(Path(fi.path).name)} [{meta}]")
+                return out
+            tree = build_tree(report.files)
+            tree_lines = render_ascii_tree(tree)
+            out.append('<pre><code>')
+            out.extend([esc(line) for line in tree_lines])
+            out.append('</code></pre>')
+            if include_contents:
+                out.append('<hr>')
+                out.append('<h2>📄 File Contents</h2>')
+                for fi in report.files:
+                    if fi.content is None:
+                        continue
+                    out.append(f'<div class="content-header"><strong>{esc(fi.path)}</strong><br>Size: {format_size(fi.size_bytes)} | Lines: {fi.lines} | Words: {fi.words} | Modified: {fi.mtime_iso}</div>')
+                    out.append('<pre><code>')
+                    out.extend([esc(line) for line in (fi.content or '').splitlines()])
+                    out.append('</code></pre>')
+            out.extend(['</div>', '</body></html>'])
+            text = "".join(out)
             save_path.write_text(text, encoding="utf-8")
             
         elif fmt.name == "JSON":

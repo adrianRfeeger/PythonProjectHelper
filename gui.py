@@ -191,6 +191,9 @@ class ExportApp(Tk):
                 # Run recover.py as a subprocess so it works even if run as packaged app
                 cmd = [sys.executable, "recover.py", report_path, output_dir]
                 result = subprocess.run(cmd, cwd=os.path.dirname(__file__), capture_output=True, text=True)
+                # Print all output to terminal/debug console for debugging
+                print("[RECOVER STDOUT]\n" + (result.stdout or ""))
+                print("[RECOVER STDERR]\n" + (result.stderr or ""))
                 if result.returncode == 0:
                     self.status_var.set("Recovery complete. See output directory.")
                     messagebox.showinfo("Recovery Complete", f"Project recovered to: {output_dir}")
@@ -199,6 +202,7 @@ class ExportApp(Tk):
                     messagebox.showerror("Recovery Failed", result.stderr or result.stdout)
             except Exception as e:
                 self.status_var.set("Recovery failed.")
+                print(f"[RECOVER EXCEPTION] {e}")
                 messagebox.showerror("Recovery Failed", str(e))
 
         threading.Thread(target=run_recover, daemon=True).start()

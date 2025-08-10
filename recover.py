@@ -42,36 +42,70 @@ def recover_from_report(report_path: str, output_dir: Path = Path("recovered_pro
         root_dir.mkdir(parents=True, exist_ok=True)
         print(f"[DEBUG] root_dir: {root_dir}")
 
-        # Try to detect the format and parse file content blocks
-        # Markdown/Plaintext: look for headings like '### 📄 `path`' and code blocks
+        # Detect if this is an HTML report (look for <!DOCTYPE html> or <html)
+        is_html = text.lstrip().lower().startswith("<!doctype html") or "<html" in text[:500].lower()
+        html_file_blocks = []
+        if is_html:
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(text, "html.parser")
+                file_blocks = []
+                # Find all <h3> with <code> (file path), then next <pre><code> (file content)
+                for h3 in soup.find_all("h3"):
+                    code = h3.find("code")
+                    if not code:
+                        continue
+                    rel_path = code.get_text(strip=True)
+                    # Find the next <pre><code> sibling (may be separated by <div> etc)
+                    pre = h3.find_next_sibling()
+                    while pre and (pre.name != "pre" or not pre.code):
+                        pre = pre.find_next_sibling()
+                    if pre and pre.code:
+                        content = pre.code.get_text()
+                        file_blocks.append((rel_path, content))
+                if file_blocks:
+                    print(f"[DEBUG] Found {len(file_blocks)} HTML file blocks (via BeautifulSoup).")
+                    recovered_files = []
+                    for rel_path, content in file_blocks:
+                        print(f"[DEBUG] Recovering HTML file: {rel_path}")
+                        write_recovered_file(root_dir, rel_path, content)
+                        recovered_files.append(rel_path)
+                    print(f"Recovered {len(file_blocks)} files from HTML report.")
+                    suspicious = [f for f in recovered_files if f == '{report.root}']
+                    subfolder_files = [f for f in recovered_files if '/' in f or '\\' in f]
+                    if suspicious:
+                        print("[WARNING] File named '{report.root}' was created. This indicates a likely extraction failure.")
+                    if not subfolder_files:
+                        print("[WARNING] No subfolder files were extracted. This may indicate a parsing issue.")
+                    if suspicious or not subfolder_files:
+                        print("[INFO] Retrying extraction using Markdown/plaintext parser as fallback...")
+                        # Fallback to Markdown logic below
+                    else:
+                        return
+                else:
+                    print("[WARNING] No file blocks found in HTML report using BeautifulSoup.")
+            except Exception as e:
+                print(f"[ERROR] BeautifulSoup HTML parsing failed: {e}")
+        # Otherwise, try Markdown/Plaintext
         md_file_blocks = list(re.finditer(r"^### [^`]*`([^`]+)`.*?^\*\*Size:.*?^```([\w]*)\n(.*?)^```", text, re.MULTILINE | re.DOTALL))
-        # Try again with a more permissive regex for file paths (including spaces and special chars)
         if not md_file_blocks:
             md_file_blocks = list(re.finditer(r"^### [^`]*`(.+?)`.*?^\*\*Size:.*?^```([\w]*)\n(.*?)^```", text, re.MULTILINE | re.DOTALL))
         if md_file_blocks:
             print(f"[DEBUG] Found {len(md_file_blocks)} Markdown/plaintext file blocks.")
+            recovered_files = []
             for m in md_file_blocks:
                 rel_path = m.group(1).strip()
                 content = m.group(3)
                 print(f"[DEBUG] Recovering Markdown file: {rel_path}")
                 write_recovered_file(root_dir, rel_path, content)
+                recovered_files.append(rel_path)
             print(f"Recovered {len(md_file_blocks)} files from Markdown/plaintext report.")
-            return
-
-        # HTML: look for <h3> with file path and <pre><code> blocks after
-        # Improved regex: non-greedy match between </h3> and <pre><code>, allows for newlines and extra HTML
-        html_file_blocks = list(re.finditer(r'<h3>.*?`([^`]+)`.*?</h3>.*?<pre><code>(.*?)</code></pre>', text, re.DOTALL))
-        # If not found, try a more robust version that allows for any content between </h3> and <pre><code>
-        if not html_file_blocks:
-            html_file_blocks = list(re.finditer(r'<h3>.*?`([^`]+)`.*?</h3>[\s\S]*?<pre><code>([\s\S]*?)</code></pre>', text))
-        if html_file_blocks:
-            print(f"[DEBUG] Found {len(html_file_blocks)} HTML file blocks.")
-            for m in html_file_blocks:
-                rel_path = m.group(1).strip()
-                content = m.group(2)
-                print(f"[DEBUG] Recovering HTML file: {rel_path}")
-                write_recovered_file(root_dir, rel_path, content)
-            print(f"Recovered {len(html_file_blocks)} files from HTML report.")
+            suspicious = [f for f in recovered_files if f == '{report.root}']
+            subfolder_files = [f for f in recovered_files if '/' in f or '\\' in f]
+            if suspicious:
+                print("[WARNING] File named '{report.root}' was created. This indicates a likely extraction failure.")
+            if not subfolder_files:
+                print("[WARNING] No subfolder files were extracted. This may indicate a parsing issue.")
             return
 
         # JSON: look for a 'files' array with 'path' and 'content'
