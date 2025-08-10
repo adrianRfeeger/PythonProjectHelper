@@ -2,44 +2,27 @@
 
 block_cipher = None
 
-
-# Use the PySide6 launcher
 a = Analysis(
-    ['launch_gui_pyside.py'],
+    ['main.py'],
     pathex=['.'],
     binaries=[],
     datas=[],
-    # PySide6 needs these hidden imports for plugins and Qt support
-    hiddenimports=[
-        'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets',
-        'PySide6.QtNetwork', 'PySide6.QtPrintSupport',
-        'PySide6.QtSvg', 'PySide6.QtXml',
-        'PySide6.QtOpenGL', 'PySide6.QtOpenGLWidgets',
-        'PySide6.QtQml', 'PySide6.QtQuick',
-        'PySide6.QtQuickWidgets',
-        'PySide6.QtSql', 'PySide6.QtTest',
-        'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore',
-        'PySide6.QtWebChannel', 'PySide6.QtWebSockets',
-        'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets',
-        'PySide6.QtPositioning', 'PySide6.QtLocation',
-        'PySide6.QtTextToSpeech',
-    ],
+    hiddenimports=['tkinter', 'tkinter.ttk'],
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=['PySide6'],
     noarchive=False,
     optimize=2
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-
 exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ProjectHelper',
+    name='ProjectHelperTk',
     debug=False,
     bootloader_ignore_signals=False,
     strip=True,
@@ -54,19 +37,19 @@ coll = COLLECT(
     a.datas,
     strip=True,
     upx=True,
-    name='ProjectHelper'
+    name='ProjectHelperTk'
 )
 
 app = BUNDLE(
     coll,
-    name='ProjectHelper.app',
+    name='ProjectHelperTk.app',
     icon=None,
-    bundle_identifier='com.projecthelper',
+    bundle_identifier='com.projecthelper.tk',
     info_plist={
-        'CFBundleName': 'ProjectHelper',
-        'CFBundleDisplayName': 'ProjectHelper',
-        'CFBundleGetInfoString': 'ProjectHelper',
-        'CFBundleIdentifier': 'com.projecthelper',
+        'CFBundleName': 'ProjectHelperTk',
+        'CFBundleDisplayName': 'ProjectHelperTk',
+        'CFBundleGetInfoString': 'ProjectHelperTk',
+        'CFBundleIdentifier': 'com.projecthelper.tk',
         'CFBundleVersion': '1.0.1',
         'CFBundleShortVersionString': '1.0.1',
         # macOS privacy permission prompts
