@@ -2,12 +2,28 @@
 
 block_cipher = None
 
+
+# Use the PySide6 launcher
 a = Analysis(
-    ['main.py'],
+    ['launch_gui_pyside.py'],
     pathex=['.'],
     binaries=[],
     datas=[],
-    hiddenimports=['tkinter.ttk'],
+    # PySide6 needs these hidden imports for plugins and Qt support
+    hiddenimports=[
+        'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets',
+        'PySide6.QtNetwork', 'PySide6.QtPrintSupport',
+        'PySide6.QtSvg', 'PySide6.QtXml',
+        'PySide6.QtOpenGL', 'PySide6.QtOpenGLWidgets',
+        'PySide6.QtQml', 'PySide6.QtQuick',
+        'PySide6.QtQuickWidgets',
+        'PySide6.QtSql', 'PySide6.QtTest',
+        'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore',
+        'PySide6.QtWebChannel', 'PySide6.QtWebSockets',
+        'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets',
+        'PySide6.QtPositioning', 'PySide6.QtLocation',
+        'PySide6.QtTextToSpeech',
+    ],
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
@@ -16,6 +32,7 @@ a = Analysis(
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
 
 exe = EXE(
     pyz,
