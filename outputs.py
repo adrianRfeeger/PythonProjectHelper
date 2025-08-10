@@ -286,10 +286,9 @@ def render_html(report: ProjectReport, include_contents: bool = True) -> str:
         '</div>'
     ])
     
-    # File listing as a tree
-    out.append('<h2>📁 File Listing</h2><div class="file-list">')
+    # File listing as a tree (rendered as ASCII tree in <pre><code> for visual parity with Markdown)
+    out.append('<h2>📁 File Listing</h2>')
 
-    from collections import defaultdict
     def build_tree(files):
         tree = {}
         for fi in files:
@@ -300,20 +299,42 @@ def render_html(report: ProjectReport, include_contents: bool = True) -> str:
             node.setdefault("__files__", []).append(fi)
         return tree
 
-    def render_tree(node, prefix=""):
+    def render_ascii_tree(node, prefix_stack=None, level=0, is_last_dir=False):
+        if prefix_stack is None:
+            prefix_stack = []
         out = []
-        for key in sorted(k for k in node.keys() if k != "__files__"):
-            out.append(f'{prefix}<div class="file-item"><span style="color:#2563eb;font-weight:bold;">📁 {esc(key)}/</span></div>')
-            out.extend(render_tree(node[key], prefix + "<span style=\"margin-left:2em;display:inline-block;\"></span>"))
-        for fi in sorted(node.get("__files__", []), key=lambda f: f.path):
-            meta = f"{format_size(fi.size_bytes)}, {fi.lines} lines, {fi.words} words, modified {fi.mtime_iso}"
-            emoji = _get_file_emoji(Path(fi.path).suffix.lower())
-            out.append(f'{prefix}<div class="file-item">{emoji} <strong>{esc(Path(fi.path).name)}</strong><div class="file-meta">{esc(meta)}</div></div>')
+        keys = sorted(k for k in node.keys() if k != "__files__")
+        n_keys = len(keys)
+        for i, key in enumerate(keys):
+            is_last = (i == n_keys - 1 and not node.get("__files__"))
+            prefix = ""
+            for draw in prefix_stack:
+                prefix += ("│   " if draw else "    ")
+            branch = "└── " if is_last else "├── "
+            out.append(f"{prefix}{branch}📁 {esc(key)}/")
+            out.extend(render_ascii_tree(node[key], prefix_stack + [not is_last], level+1, is_last))
+        files = sorted(node.get("__files__", []), key=lambda f: f.path)
+        n_files = len(files)
+        for j, fi in enumerate(files):
+            is_last_file = (j == n_files - 1)
+            prefix = ""
+            for draw in prefix_stack:
+                prefix += ("│   " if draw else "    ")
+            branch = "└── " if is_last_file else "├── "
+            size = format_size(fi.size_bytes)
+            lines_str = str(fi.lines) if fi.lines != "?" else "—"
+            words_str = str(fi.words) if fi.words != "?" else "—"
+            ext = Path(fi.path).suffix.lower()
+            emoji = _get_file_emoji(ext)
+            meta = f"{size}, {lines_str} lines, {words_str} words, modified {fi.mtime_iso}"
+            out.append(f"{prefix}{branch}{emoji} {esc(Path(fi.path).name)} ({esc(meta)})")
         return out
 
     tree = build_tree(report.files)
-    out.extend(render_tree(tree))
-    out.append('</div>')
+    tree_lines = render_ascii_tree(tree)
+    out.append('<pre><code>')
+    out.append("\n".join(tree_lines))
+    out.append('</code></pre>')
     
     # File contents
     if include_contents:

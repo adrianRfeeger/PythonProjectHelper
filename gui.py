@@ -35,8 +35,8 @@ class ExportApp(Tk):
         self.minsize(600, 450)
 
         # State
-        self.folder_path: Optional[Path] = None
-        self.save_path: Optional[Path] = None
+        self.folder_path = None
+        self.save_path = None
         self.fmt_var = StringVar(value=self.config.output_format)
         self.include_var = BooleanVar(value=self.config.include_contents)
         self.status_var = StringVar(value="Select a project folder to begin...")
@@ -53,6 +53,11 @@ class ExportApp(Tk):
             self.path_label.configure(text=str(self.folder_path))
             self.status_var.set("Scanning folder for files...")
             self._quick_scan()
+
+        # Load last save file if available
+        if self.config.last_save_file:
+            self.save_path = Path(self.config.last_save_file)
+            self.save_label.configure(text=str(self.save_path))
 
     def _setup_ui(self) -> None:
         """Setup the complete user interface"""
@@ -314,10 +319,8 @@ class ExportApp(Tk):
         if save_path_str:
             self.save_path = Path(save_path_str)
             self.save_label.configure(text=str(self.save_path))
-            
-            # Save to config
+            # Save to config (folder and file)
             self.config_manager.update_save_folder(str(self.save_path))
-            
             # Ask user if they want to export immediately
             auto_export = messagebox.askyesno(
                 "Export Now?", 
@@ -325,7 +328,6 @@ class ExportApp(Tk):
                 "Would you like to start the export now?",
                 default="no"
             )
-            
             if auto_export:
                 self.on_export()
             else:

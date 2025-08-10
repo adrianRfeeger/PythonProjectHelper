@@ -15,6 +15,7 @@ class AppConfig:
     # Last used paths
     last_source_folder: Optional[str] = None
     last_save_folder: Optional[str] = None
+    last_save_file: Optional[str] = None  # NEW: last selected output file
     
     # Export options
     output_format: str = OutputFormat.MARKDOWN.value
@@ -102,9 +103,10 @@ class ConfigManager:
         self.save_config(config)
     
     def update_save_folder(self, path: str) -> None:
-        """Update the last used save folder"""
+        """Update the last used save folder and file"""
         config = self.load_config()
         config.last_save_folder = str(Path(path).parent)
+        config.last_save_file = str(path)
         self.save_config(config)
     
     def update_export_options(self, format_value: str, include_contents: bool) -> None:
