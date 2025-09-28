@@ -41,6 +41,11 @@ def _is_text_file(file_path: Path) -> bool:
     
     return False
 
+
+def is_content_readable(file_path: Path) -> bool:
+    """Public helper used by the GUI to determine if a file's content can be captured."""
+    return _is_text_file(file_path)
+
 def _read_file_counts(file_path: Path) -> Tuple[Path, int | str, int | str, str]:
     """Read file and count lines/words with enhanced error handling"""
     try:

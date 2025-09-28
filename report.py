@@ -9,7 +9,114 @@ from pathlib import Path
 
 # Exclusions and file-type hints
 EXCLUDED_DIRS: set[str] = {"__pycache__", ".git", ".svn", ".hg"}
-CODE_EXTENSIONS: set[str] = {".py", ".spec", ".txt", ".md", ".json", ".yml", ".yaml"}
+CODE_EXTENSIONS: set[str] = {
+    # Python
+    ".py", ".pyw", ".spec",
+    ".ipynb",
+
+    # Go
+    ".go", ".mod", ".sum",
+
+    # C / C++
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hh", ".hxx",
+
+    # C#
+    ".cs",
+
+    # Java
+    ".java",
+
+    # Kotlin
+    ".kt", ".kts",
+
+    # Scala
+    ".scala", ".sc",
+
+    # Rust
+    ".rs",
+
+    # Swift
+    ".swift",
+
+    # Objective-C
+    ".m", ".mm",
+
+    # Dart / Flutter
+    ".dart",
+
+    # JavaScript / TypeScript
+    ".js", ".mjs", ".cjs",
+    ".ts", ".tsx", ".jsx",
+
+    # PHP
+    ".php", ".phtml",
+
+    # Ruby
+    ".rb", ".erb",
+
+    # Perl
+    ".pl", ".pm", ".t",
+
+    # R
+    ".r", ".R", ".Rmd",
+
+    # Julia
+    ".jl",
+
+    # Shell / Batch
+    ".sh", ".bash", ".zsh", ".ksh", ".csh", ".bat", ".cmd",
+
+    # PowerShell
+    ".ps1", ".psm1", ".psd1",
+
+    # SQL & DB
+    ".sql", ".psql",
+
+    # Haskell
+    ".hs", ".lhs",
+
+    # Erlang / Elixir
+    ".erl", ".hrl",
+    ".ex", ".exs",
+
+    # OCaml / F#
+    ".ml", ".mli", ".fs", ".fsi", ".fsx",
+
+    # Lisp / Scheme / Clojure
+    ".lisp", ".lsp", ".cl", ".el", ".scm", ".clj", ".cljs", ".cljc",
+
+    # Lua
+    ".lua",
+
+    # YAML / JSON / TOML / INI / ENV
+    ".yml", ".yaml", ".json", ".toml", ".ini", ".env",
+
+    # XML / HTML / Templates
+    ".xml", ".xsd", ".xslt", ".html", ".htm", ".xhtml",
+    ".jsp", ".asp", ".aspx",
+    ".mustache", ".hbs", ".ejs", ".twig", ".jinja", ".jinja2",
+    ".tmpl", ".tpl",
+
+    # CSS & Preprocessors
+    ".css", ".scss", ".sass", ".less",
+
+    # Markdown / Docs
+    ".md", ".markdown", ".rst", ".txt", ".tex",
+
+    # Config / Misc
+    ".cfg", ".conf", ".properties", ".gradle", ".groovy",
+    ".make", ".mk", "Makefile", "CMakeLists.txt",
+    ".dockerfile", "Dockerfile",
+    ".gitignore", ".gitattributes",
+    ".editorconfig",
+    ".bazel", ".bzl",
+
+    # Protocols
+    ".proto", ".thrift", ".avdl",
+
+    # Assembly
+    ".s", ".asm",
+}
 MAX_THREADS_FALLBACK = 4
 
 def now_stamp() -> str:

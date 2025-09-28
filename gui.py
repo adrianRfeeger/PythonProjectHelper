@@ -10,8 +10,8 @@ from pathlib import Path
 from tkinter import Tk, filedialog, ttk, StringVar, BooleanVar, messagebox, IntVar
 from typing import Optional
 
-from report import OutputFormat
-from scan import scan_project
+from report import OutputFormat, EXCLUDED_DIRS, ProjectReport
+from scan import scan_project, is_content_readable
 from outputs import export_report
 import subprocess
 import sys
@@ -44,9 +44,23 @@ class ExportApp(Tk):
         self.status_var = StringVar(value="Select a project folder to begin...")
         self.file_count_var = IntVar(value=0)
         self.export_running = False
+        self.node_states: dict[str, bool | None] = {}
+        self.node_labels: dict[str, str] = {}
+        self.tree_ready = False
+        self._tree_build_id = 0
+        self._tree_file_total = 0
+        self._tree_root_id = "D:ROOT"
+        self.format_extensions: dict[OutputFormat, str] = {
+            OutputFormat.MARKDOWN: ".md",
+            OutputFormat.PLAINTEXT: ".txt",
+            OutputFormat.HTML: ".html",
+            OutputFormat.JSON: ".json",
+            OutputFormat.ZIP: ".zip",
+        }
 
         # Setup UI
         self._setup_ui()
+        self._update_tree_enable_state()
         self._center_window()
         
         # Load last source folder if available
@@ -55,6 +69,7 @@ class ExportApp(Tk):
             self.path_label.configure(text=str(self.folder_path))
             self.status_var.set("Scanning folder for files...")
             self._quick_scan()
+            self._schedule_tree_build()
 
         # Load last save file if available
         if self.config.last_save_file:
@@ -119,6 +134,38 @@ class ExportApp(Tk):
                              text="💡 Tip: Including contents creates detailed reports but larger files",
                              font=("TkDefaultFont", 8), foreground="gray")
         help_text.pack(anchor="w", pady=(2, 0))
+
+        # File selection tree for content inclusion
+        tree_frame = ttk.LabelFrame(main_frame, text="File Content Selection", padding=8)
+        tree_frame.pack(fill="both", expand=True, pady=(0, 8))
+
+        self.tree_message = ttk.Label(
+            tree_frame,
+            text="Select a project folder to preview file contents.",
+            font=("TkDefaultFont", 9)
+        )
+        self.tree_message.pack(anchor="w", pady=(0, 6))
+
+        tree_container = ttk.Frame(tree_frame)
+        tree_container.pack(fill="both", expand=True)
+
+        self.file_tree = ttk.Treeview(
+            tree_container,
+            show="tree",
+            selectmode="none"
+        )
+        self.file_tree.column("#0", stretch=True, minwidth=200, width=260)
+        self.file_tree.pack(side="left", fill="both", expand=True)
+
+        tree_scroll_y = ttk.Scrollbar(tree_container, orient="vertical", command=self.file_tree.yview)
+        tree_scroll_y.pack(side="right", fill="y")
+        self.file_tree.configure(yscrollcommand=tree_scroll_y.set)
+
+        tree_scroll_x = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.file_tree.xview)
+        tree_scroll_x.pack(fill="x", pady=(6, 0))
+        self.file_tree.configure(xscrollcommand=tree_scroll_x.set)
+
+        self.file_tree.bind("<Double-1>", self._on_tree_double_click)
 
         # Save destination section
         save_frame = ttk.LabelFrame(main_frame, text="Save Destination", padding=8)
@@ -260,6 +307,7 @@ class ExportApp(Tk):
         # Update UI
         self.path_label.configure(text=str(self.folder_path))
         self.status_var.set("Scanning folder for files...")
+        self._schedule_tree_build()
         
         # Quick scan for file count in background
         self._quick_scan()
@@ -277,6 +325,331 @@ class ExportApp(Tk):
                 self.after(0, lambda: self.status_var.set(f"Error scanning folder: {e}"))
         
         threading.Thread(target=scan_worker, daemon=True).start()
+
+    def _clear_tree(self, message: str) -> None:
+        """Reset the file selection tree and show a message."""
+        if not hasattr(self, "file_tree") or self.file_tree is None:
+            return
+        for child in self.file_tree.get_children():
+            self.file_tree.delete(child)
+        self.node_states.clear()
+        self.node_labels.clear()
+        self.tree_ready = False
+        self._tree_file_total = 0
+        try:
+            self.file_tree.state(("disabled",))
+        except Exception:
+            pass
+        self.tree_message.configure(text=message)
+
+    def _schedule_tree_build(self) -> None:
+        """Begin asynchronous build of the file selection tree."""
+        if not hasattr(self, "file_tree") or self.file_tree is None:
+            return
+
+        if self.folder_path is None:
+            self._clear_tree("Select a project folder to preview file contents.")
+            return
+
+        self._tree_build_id += 1
+        request_id = self._tree_build_id
+        self._clear_tree("Building file preview...")
+        target_path = self.folder_path
+
+        def worker() -> None:
+            try:
+                dirs_map, files_map, total_files = self._gather_tree_snapshot(target_path)
+            except Exception as exc:
+                self.after(0, lambda: self._handle_tree_failure(str(exc), request_id))
+                return
+            self.after(0, lambda: self._populate_tree(dirs_map, files_map, total_files, request_id))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_tree_failure(self, error: str, request_id: int) -> None:
+        """Display a friendly message if the tree build fails."""
+        if request_id != self._tree_build_id:
+            return
+        truncated = (error[:120] + "...") if len(error) > 120 else error
+        print(f"[TREE BUILD ERROR] {error}")
+        self._clear_tree(f"Unable to build file preview: {truncated}")
+
+    def _gather_tree_snapshot(self, root_path: Path) -> tuple[dict[str, list[str]], dict[str, list[str]], int]:
+        """Collect directory/file relationships for readable files under the root."""
+        readable_files: list[str] = []
+
+        for current_root, dirs, files in os.walk(root_path, followlinks=False):
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.startswith('.')]
+
+            for filename in files:
+                if filename.startswith('.'):
+                    continue
+
+                full_path = Path(current_root) / filename
+
+                try:
+                    if full_path.is_symlink():
+                        continue
+                    if not is_content_readable(full_path):
+                        continue
+                except Exception:
+                    continue
+
+                try:
+                    rel_path = full_path.relative_to(root_path).as_posix()
+                except ValueError:
+                    continue
+
+                readable_files.append(rel_path)
+
+        readable_files.sort()
+
+        directories: set[str] = {""}
+        for rel_path in readable_files:
+            parts = rel_path.split('/')
+            for idx in range(1, len(parts)):
+                directories.add('/'.join(parts[:idx]))
+
+        dirs_map: dict[str, list[str]] = {key: [] for key in directories}
+        files_map: dict[str, list[str]] = {key: [] for key in directories}
+
+        for directory in directories:
+            if not directory:
+                continue
+            parent = directory.rsplit('/', 1)[0] if '/' in directory else ''
+            dirs_map.setdefault(parent, []).append(directory)
+
+        for rel_path in readable_files:
+            parent = rel_path.rsplit('/', 1)[0] if '/' in rel_path else ''
+            files_map.setdefault(parent, []).append(rel_path)
+
+        for key in dirs_map:
+            dirs_map[key].sort()
+        for key in files_map:
+            files_map[key].sort()
+
+        return dirs_map, files_map, len(readable_files)
+
+    def _populate_tree(
+        self,
+        dirs_map: dict[str, list[str]],
+        files_map: dict[str, list[str]],
+        total_files: int,
+        request_id: int
+    ) -> None:
+        """Populate the UI tree with the gathered snapshot."""
+        if request_id != self._tree_build_id:
+            return
+
+        if not hasattr(self, "file_tree") or self.file_tree is None:
+            return
+
+        for child in self.file_tree.get_children():
+            self.file_tree.delete(child)
+
+        self.node_states.clear()
+        self.node_labels.clear()
+        self.tree_ready = True
+        self._tree_file_total = total_files
+
+        root_label = f"{self.folder_path.name}/" if self.folder_path is not None else "Project/"
+        self.node_labels[self._tree_root_id] = root_label
+        self.node_states[self._tree_root_id] = True
+        self.file_tree.insert(
+            "",
+            "end",
+            iid=self._tree_root_id,
+            text=f"{self._checkbox_prefix(True)} {root_label}",
+            open=True
+        )
+
+        self._insert_tree_children(self._tree_root_id, "", dirs_map, files_map)
+
+        if total_files == 0:
+            self.tree_message.configure(text="No text-readable files found to include.")
+        elif self.include_var.get():
+            self.tree_message.configure(text="Double-click entries to include file contents in the export.")
+        else:
+            self.tree_message.configure(text="Enable 'Include file contents' to make selections.")
+
+        self._update_tree_enable_state()
+
+    def _insert_tree_children(
+        self,
+        parent_item: str,
+        directory_key: str,
+        dirs_map: dict[str, list[str]],
+        files_map: dict[str, list[str]]
+    ) -> None:
+        """Insert directory and file nodes beneath the given parent."""
+        for dir_key in dirs_map.get(directory_key, []):
+            name = dir_key.split('/')[-1] if '/' in dir_key else dir_key
+            label = f"{name}/"
+            item_id = f"D:{dir_key}" if dir_key else self._tree_root_id
+            if item_id == self._tree_root_id:
+                continue
+            self.node_labels[item_id] = label
+            self.node_states[item_id] = True
+            self.file_tree.insert(
+                parent_item,
+                "end",
+                iid=item_id,
+                text=f"{self._checkbox_prefix(True)} {label}",
+                open=False
+            )
+            self._insert_tree_children(item_id, dir_key, dirs_map, files_map)
+
+        for file_key in files_map.get(directory_key, []):
+            name = file_key.split('/')[-1]
+            item_id = f"F:{file_key}"
+            self.node_labels[item_id] = name
+            self.node_states[item_id] = True
+            self.file_tree.insert(
+                parent_item,
+                "end",
+                iid=item_id,
+                text=f"{self._checkbox_prefix(True)} {name}"
+            )
+
+    def _checkbox_prefix(self, state: bool | None) -> str:
+        """Return the ASCII checkbox representation for a node state."""
+        if state is True:
+            return "[x]"
+        if state is False:
+            return "[ ]"
+        return "[~]"
+
+    def _update_tree_item_text(self, item_id: str) -> None:
+        """Refresh the displayed text for a tree node."""
+        label = self.node_labels.get(item_id, "")
+        state = self.node_states.get(item_id, False)
+        self.file_tree.item(item_id, text=f"{self._checkbox_prefix(state)} {label}")
+
+    def _set_children_state(self, parent_id: str, state: bool) -> None:
+        """Apply a state to all descendant nodes."""
+        for child_id in self.file_tree.get_children(parent_id):
+            self.node_states[child_id] = state
+            self._update_tree_item_text(child_id)
+            self._set_children_state(child_id, state)
+
+    def _update_parent_state(self, item_id: str) -> None:
+        """Update parent nodes to reflect their children's combined state."""
+        parent_id = self.file_tree.parent(item_id)
+        if not parent_id:
+            return
+
+        child_states = [self.node_states.get(child) for child in self.file_tree.get_children(parent_id)]
+        if child_states and all(state is True for state in child_states):
+            parent_state: bool | None = True
+        elif child_states and all(state is False for state in child_states):
+            parent_state = False
+        else:
+            parent_state = None
+
+        self.node_states[parent_id] = parent_state
+        self._update_tree_item_text(parent_id)
+        self._update_parent_state(parent_id)
+
+    def _toggle_tree_node(self, item_id: str) -> None:
+        """Toggle a node's selection state and propagate the change."""
+        if item_id not in self.node_states:
+            return
+
+        current = self.node_states[item_id]
+        target = True if current is None else not current
+
+        self.node_states[item_id] = target
+        self._update_tree_item_text(item_id)
+        self._set_children_state(item_id, target)
+        self._update_parent_state(item_id)
+
+    def _on_tree_double_click(self, event):
+        """Handle double-click events to toggle checkbox states."""
+        if not self.include_var.get() or not self.tree_ready:
+            return
+
+        try:
+            if "disabled" in self.file_tree.state():
+                return
+        except Exception:
+            pass
+
+        item_id = self.file_tree.identify_row(event.y)
+        if not item_id:
+            item_id = self.file_tree.focus()
+        if not item_id:
+            return
+
+        self._toggle_tree_node(item_id)
+
+        # Mirror the default Treeview behavior: double-click toggles expansion
+        if self.file_tree.get_children(item_id):
+            current_open = bool(self.file_tree.item(item_id, "open"))
+            self.file_tree.item(item_id, open=not current_open)
+        return "break"
+
+    def _update_tree_enable_state(self) -> None:
+        """Enable or disable the treeview based on current options."""
+        if not hasattr(self, "file_tree") or self.file_tree is None:
+            return
+
+        if not self.include_var.get() or not self.tree_ready or self._tree_file_total == 0:
+            try:
+                self.file_tree.state(("disabled",))
+            except Exception:
+                pass
+            if self.tree_ready and self._tree_file_total and not self.include_var.get():
+                self.tree_message.configure(text="Enable 'Include file contents' to make selections.")
+            return
+
+        try:
+            self.file_tree.state(("!disabled",))
+        except Exception:
+            pass
+
+        if self.tree_ready and self._tree_file_total:
+            self.tree_message.configure(text="Double-click entries to include file contents in the export.")
+
+    def _get_selected_file_paths(self) -> set[str] | None:
+        """Return selected file paths, or None if no tree snapshot is available."""
+        if not self.include_var.get():
+            return set()
+        if not self.tree_ready or not self.node_states:
+            return None
+
+        selected: set[str] = set()
+        for node_id, state in self.node_states.items():
+            if not node_id.startswith("F:"):
+                continue
+            if state is True:
+                selected.add(node_id[2:])
+        return selected
+
+    def _resolve_format_from_suffix(self, suffix: str) -> Optional[OutputFormat]:
+        """Map a file suffix to a known output format, if possible."""
+        normalized = suffix.lower()
+        for fmt, ext in self.format_extensions.items():
+            if normalized == ext:
+                return fmt
+        return None
+
+    def _apply_content_selection(self, report: ProjectReport, selected: set[str] | None) -> None:
+        """Drop file contents that are not selected for inclusion."""
+        if selected is None:
+            return
+
+        if not selected:
+            for fi in report.files:
+                fi.content = None
+            return
+
+        allowed = set(selected)
+        for fi in report.files:
+            if fi.content is None:
+                continue
+            normalized = fi.path.replace(os.sep, "/")
+            if normalized not in allowed:
+                fi.content = None
 
     def _count_files(self, path: Path) -> int:
         """Count files in the project (excluding hidden/ignored)"""
@@ -313,6 +686,7 @@ class ExportApp(Tk):
             self.fmt_var.get(),
             self.include_var.get()
         )
+        self._update_tree_enable_state()
 
     def on_format_changed(self, event=None) -> None:
         """Handle format selection change"""
@@ -325,6 +699,8 @@ class ExportApp(Tk):
         if self.folder_path and self.save_path:
             # Update save path extension to match format
             self._suggest_filename()
+        elif self.folder_path:
+            self._suggest_placeholder_filename()
 
     def on_choose_save(self) -> None:
         """Handle save destination selection"""
@@ -334,22 +710,16 @@ class ExportApp(Tk):
             return
 
         fmt = OutputFormat.from_label(self.fmt_var.get())
-        ext_map = {
-            OutputFormat.MARKDOWN: (".md", "Markdown files"),
-            OutputFormat.PLAINTEXT: (".txt", "Text files"),
-            OutputFormat.HTML: (".html", "HTML files"),
-            OutputFormat.JSON: (".json", "JSON files"),
-            OutputFormat.ZIP: (".zip", "Zip archives"),
-        }
-        
-        ext, desc = ext_map[fmt]
-        default_name = f"{self.folder_path.name}_report{ext}"
-        
+        current_ext = self.format_extensions[fmt]
+        default_name = f"{self.folder_path.name}_report{current_ext}"
+
+        ordered_formats = [fmt] + [f for f in OutputFormat if f != fmt]
         filetypes = [
-            (desc, f"*{ext}"),
-            ("All files", "*.*")
+            (f_option.value, f"*{self.format_extensions[f_option]}")
+            for f_option in ordered_formats
         ]
-        
+        filetypes.append(("All files", "*.*"))
+
         # Use last save folder as initial directory if available
         initial_dir = None
         if self.config.last_save_folder and Path(self.config.last_save_folder).exists():
@@ -357,16 +727,22 @@ class ExportApp(Tk):
         
         save_path_str = filedialog.asksaveasfilename(
             title=f"Save {fmt.value} Report",
-            defaultextension=ext,
+            defaultextension=current_ext,
             initialfile=default_name,
             initialdir=initial_dir,
             filetypes=filetypes,
             parent=self
         )
-        
+
         if save_path_str:
             self.save_path = Path(save_path_str)
             self.save_label.configure(text=str(self.save_path))
+            # Update format selection if user picked a different extension
+            selected_fmt = self._resolve_format_from_suffix(self.save_path.suffix)
+            if selected_fmt and selected_fmt != fmt:
+                self.fmt_var.set(selected_fmt.value)
+                self.combo.set(selected_fmt.value)
+                self.on_format_changed()
             # Save to config (folder and file)
             self.config_manager.update_save_folder(str(self.save_path))
             # Ask user if they want to export immediately
@@ -388,18 +764,20 @@ class ExportApp(Tk):
             return
             
         fmt = OutputFormat.from_label(self.fmt_var.get())
-        ext_map = {
-            OutputFormat.MARKDOWN: ".md",
-            OutputFormat.PLAINTEXT: ".txt", 
-            OutputFormat.HTML: ".html",
-            OutputFormat.JSON: ".json",
-            OutputFormat.ZIP: ".zip",
-        }
-        
-        new_ext = ext_map[fmt]
+        new_ext = self.format_extensions[fmt]
         new_path = self.save_path.with_suffix(new_ext)
         self.save_path = new_path
         self.save_label.configure(text=str(self.save_path))
+
+    def _suggest_placeholder_filename(self) -> None:
+        """Show a suggested filename when no save path is chosen yet."""
+        if self.save_path is not None or not self.folder_path:
+            return
+
+        fmt = OutputFormat.from_label(self.fmt_var.get())
+        suggested = self.folder_path.with_suffix("")
+        placeholder = suggested.name + "_report" + self.format_extensions[fmt]
+        self.save_label.configure(text=placeholder)
 
     def on_export(self) -> None:
         """Handle export operation"""
@@ -421,6 +799,7 @@ class ExportApp(Tk):
 
         fmt = OutputFormat.from_label(self.fmt_var.get())
         include = bool(self.include_var.get())
+        selected_paths = self._get_selected_file_paths() if include else None
 
         self._set_working(True)
         self.status_var.set("Scanning project files...")
@@ -435,6 +814,9 @@ class ExportApp(Tk):
                 # Scan project
                 self.after(0, lambda: self.status_var.set("Analyzing project structure..."))
                 report = scan_project(self.folder_path)
+
+                if include:
+                    self._apply_content_selection(report, selected_paths)
                 
                 # Export report
                 self.after(0, lambda: self.status_var.set("Generating export file..."))
