@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 from report import OutputFormat
 
@@ -26,6 +26,10 @@ class AppConfig:
     window_height: int = 500
     window_x: Optional[int] = None
     window_y: Optional[int] = None
+
+    # Per-project content selection exclusions (paths stored relative to project root)
+    content_exclusions: Dict[str, list[str]] = field(default_factory=dict)
+    deep_options: Dict[str, bool] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary"""
@@ -114,6 +118,31 @@ class ConfigManager:
         config = self.load_config()
         config.output_format = format_value
         config.include_contents = include_contents
+        self.save_config(config)
+    
+    def get_content_exclusions(self, root_path: str) -> list[str]:
+        """Get stored excluded file paths for a given project root."""
+        config = self.load_config()
+        return list(config.content_exclusions.get(root_path, []))
+
+    def update_content_exclusions(self, root_path: str, exclusions: list[str]) -> None:
+        """Persist excluded file paths for a project root."""
+        config = self.load_config()
+        if exclusions:
+            config.content_exclusions[root_path] = exclusions
+        else:
+            config.content_exclusions.pop(root_path, None)
+        self.save_config(config)
+    
+    def get_deep_options(self) -> Dict[str, bool]:
+        """Return stored deep analysis option overrides."""
+        config = self.load_config()
+        return dict(config.deep_options)
+
+    def update_deep_options(self, options: Dict[str, bool]) -> None:
+        """Persist deep analysis option overrides."""
+        config = self.load_config()
+        config.deep_options.update(options)
         self.save_config(config)
     
     def update_window_geometry(self, width: int, height: int, x: int, y: int) -> None:

@@ -146,6 +146,9 @@ class OutputFormat(Enum):
     HTML = "HTML (.html)"
     JSON = "JSON (.json)"
     ZIP = "Zip (.zip)"
+    DEEP_MARKDOWN = "Deep analysis (.md)"
+    DEEP_JSON = "Deep analysis (.json)"
+    LRC = "LLM Capsule (.lrc.json)"
 
     @staticmethod
     def from_label(label: str) -> "OutputFormat":
