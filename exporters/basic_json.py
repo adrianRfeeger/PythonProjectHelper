@@ -27,6 +27,20 @@ class BasicJSONExporter(Exporter):
         result["format"] = "basic-json"
         result["format_version"] = "1.0"
         
+        # Include file contents if requested and available
+        include_content = options.get('include_content', False)
+        project_report = options.get('project_report')
+        
+        if include_content and project_report:
+            # Create a mapping of file paths to content
+            content_map = {f.path: f.content for f in project_report.files if f.content is not None}
+            
+            # Add content to file analyses
+            for file_analysis in result.get('files', []):
+                file_path = file_analysis.get('path')
+                if file_path in content_map:
+                    file_analysis['content'] = content_map[file_path]
+        
         return json.dumps(result, indent=2, ensure_ascii=False, default=str)
     
     def mimetype(self) -> str:

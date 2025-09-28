@@ -7,6 +7,9 @@ from .base import ExporterRegistry, Exporter, register_exporter
 from .llm_tds import LLMTDSExporter
 from .basic_json import BasicJSONExporter
 from .basic_markdown import BasicMarkdownExporter
+from .full_content_json import FullContentJSONExporter
+from .full_content_markdown import FullContentMarkdownExporter
+from .legacy_html import LegacyHTMLExporter
 
 # Export main classes and functions
 __all__ = [
@@ -16,6 +19,9 @@ __all__ = [
     'LLMTDSExporter',
     'BasicJSONExporter',
     'BasicMarkdownExporter',
+    'FullContentJSONExporter',
+    'FullContentMarkdownExporter',
+    'LegacyHTMLExporter',
 ]
 
 

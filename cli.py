@@ -67,6 +67,12 @@ Examples:
         help='Formats to include in bundle (default: all)'
     )
     
+    parser.add_argument(
+        '--include-content',
+        action='store_true',
+        help='Include file contents in analysis-only exports (full-content formats always include content)'
+    )
+    
     # Information
     parser.add_argument(
         '--list-formats',
@@ -166,9 +172,9 @@ Examples:
         
         # Handle bundle mode
         if args.bundle:
-            handle_bundle(analysis, args, args.verbose)
+            handle_bundle(analysis, project_report, args, args.verbose)
         else:
-            handle_single_export(analysis, args, args.verbose)
+            handle_single_export(analysis, project_report, args, args.verbose)
             
     except Exception as e:
         print(f"Error during analysis: {e}", file=sys.stderr)
@@ -236,7 +242,7 @@ def show_format_info(format_id: str) -> None:
     print(f"  python cli.py /path/to/project --format {format_id} --output report.out")
 
 
-def handle_single_export(analysis, args, verbose: bool) -> None:
+def handle_single_export(analysis, project_report, args, verbose: bool) -> None:
     """Handle single format export."""
     if not args.format:
         print("Error: --format is required for single export", file=sys.stderr)
@@ -254,8 +260,12 @@ def handle_single_export(analysis, args, verbose: bool) -> None:
         # Convert analysis to dict for compatibility
         analysis_dict = analysis.model_dump() if hasattr(analysis, 'model_dump') else analysis.__dict__
         
+        # Prepare export options with project report for full-content exporters
+        export_options = args.__dict__.copy()
+        export_options['project_report'] = project_report
+        
         # Generate export
-        export_data = exporter.render(analysis_dict, args.__dict__)
+        export_data = exporter.render(analysis_dict, export_options)
         
         # Determine output path
         if args.output:
@@ -283,7 +293,7 @@ def handle_single_export(analysis, args, verbose: bool) -> None:
         sys.exit(1)
 
 
-def handle_bundle(analysis, args, verbose: bool) -> None:
+def handle_bundle(analysis, project_report, args, verbose: bool) -> None:
     """Handle bundle export with multiple formats."""
     from exporters import list_available_formats, get_exporter
     
@@ -310,6 +320,10 @@ def handle_bundle(analysis, args, verbose: bool) -> None:
     # Convert analysis to dict for compatibility
     analysis_dict = analysis.model_dump() if hasattr(analysis, 'model_dump') else analysis.__dict__
     
+    # Prepare export options with project report for full-content exporters
+    export_options = args.__dict__.copy()
+    export_options['project_report'] = project_report
+    
     # Generate exports for each format
     for format_id in format_ids:
         try:
@@ -318,7 +332,7 @@ def handle_bundle(analysis, args, verbose: bool) -> None:
                 print(f"  ✗ {format_id}: Unknown format", file=sys.stderr)
                 continue
             
-            export_data = exporter.render(analysis_dict, args.__dict__)
+            export_data = exporter.render(analysis_dict, export_options)
             bundle['exports'][format_id] = {
                 'name': exporter.name,
                 'data': export_data.decode('utf-8') if isinstance(export_data, bytes) else export_data,

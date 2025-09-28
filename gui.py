@@ -290,19 +290,32 @@ class ExportApp(Tk):
     def _get_available_formats(self) -> list[dict[str, str]]:
         """Get available export formats from the registry."""
         formats = []
+        # Define friendly display names for each format
+        format_display_names = {
+            'basic-json': '📋 Basic JSON - Analysis Only',
+            'basic-markdown': '📝 Basic Markdown - Analysis Only', 
+            'llm-tds': '🤖 LLM Optimised - Compressed',
+            'full-content-json': '📦 Complete JSON - With Source Code',
+            'full-content-markdown': '📄 Complete Markdown - With Source Code',
+            'legacy-html': '🌐 Styled HTML - With Source Code'
+        }
+        
         for name in self.registry.list_formats():
             exporter_class = self.registry.get(name)
             if exporter_class:
                 exporter = exporter_class()
                 # Get file extension from exporter
                 ext = self._guess_extension(exporter.mimetype())
+                display_name = format_display_names.get(name, f"{name.title().replace('-', ' ')} ({ext})")
+                
                 formats.append({
                     'name': name,
-                    'display': f"{name.title().replace('-', ' ')} ({ext})",
+                    'display': display_name,
                     'extension': ext,
                     'mimetype': exporter.mimetype(),
                     'llm_friendly': exporter.is_llm_friendly(),
-                    'lossless': exporter.is_lossless()
+                    'lossless': exporter.is_lossless(),
+                    'has_source_code': name.startswith('full-content') or name == 'legacy-html'
                 })
         return formats
 
@@ -424,6 +437,14 @@ class ExportApp(Tk):
                                  values=[f['display'] for f in self.available_formats])
         self.combo.pack(side="left", pady=(0, 0))
         self.combo.bind('<<ComboboxSelected>>', self.on_format_changed)
+
+        # Format description
+        self.format_description = ttk.Label(format_frame,
+                                          text="",
+                                          style="Body.TLabel",
+                                          foreground="#666666",
+                                          font=("Helvetica", 10))
+        self.format_description.pack(fill="x", pady=(8, 0))
 
         # Content inclusion option
         content_frame = ttk.Frame(options_inner)
@@ -592,6 +613,10 @@ class ExportApp(Tk):
                                     style="Modern.TButton",
                                     command=self.on_export, state="disabled")
         self.export_btn.pack(side="right", padx=(0, 10))
+
+        # Initialize format description
+        self.on_format_changed()
+
     def on_recover(self) -> None:
         """Handle recovery of files from a report file via recover.py"""
         # Ask user to select a report file
@@ -1220,7 +1245,36 @@ class ExportApp(Tk):
 
     def on_format_changed(self, event=None) -> None:
         """Handle format selection change"""
-        # Save format preference
+        fmt_name = self._format_name_from_display(self.fmt_var.get())
+        format_info = self._format_from_name(fmt_name) if fmt_name else None
+        
+        # Update format description
+        format_descriptions = {
+            'basic-json': 'Structured analysis without source code. Best for automation and APIs.',
+            'basic-markdown': 'Human-readable analysis without source code. Perfect for documentation.',
+            'llm-tds': 'AI-optimised compressed format. 90% smaller, ideal for language models.',
+            'full-content-json': 'Complete backup with all source code. Machine-readable, fully recoverable.',
+            'full-content-markdown': 'Complete documentation with all source code. Human-readable, fully recoverable.',
+            'legacy-html': 'Styled web format with all source code. Beautiful for presentations and sharing.'
+        }
+        
+        if fmt_name:
+            description = format_descriptions.get(fmt_name, "")
+            self.format_description.configure(text=description)
+        
+        # Update content checkbox based on format capabilities
+        if format_info:
+            if format_info.get('has_source_code', False):
+                # Full-content formats always include source code
+                self.include_var.set(True)
+                self.content_check.configure(state="disabled", 
+                                           text="✅ Source code included (full-content format)")
+            else:
+                # Analysis-only formats have optional content inclusion
+                self.content_check.configure(state="normal",
+                                           text="📄 Include file contents in export")
+        
+        # Save format preference  
         self.config_manager.update_export_options(
             self.fmt_var.get(), 
             self.include_var.get()
@@ -1231,11 +1285,6 @@ class ExportApp(Tk):
             self._suggest_filename(persist=True)
         elif self.folder_path:
             self._suggest_placeholder_filename()
-
-        # For the new system, all formats support content inclusion
-        # No need to disable content checkbox
-        self.content_check.configure(state="normal")
-        self.config_manager.update_export_options(self.fmt_var.get(), self.include_var.get())
         
         self._update_deep_controls_visibility()
         self._update_tree_enable_state()
@@ -1327,10 +1376,11 @@ class ExportApp(Tk):
         
         return name
     
-    def _replace_extension_properly(self, path: Path, new_ext: str) -> Path:
+    def _replace_extension_properly(self, path: Path | str, new_ext: str) -> Path:
         """Replace file extension properly, handling multi-part extensions like .lrc.json"""
-        base_name = self._clean_filename_base(path.name)
-        return path.parent / (base_name + new_ext)
+        path_obj = Path(path) if isinstance(path, str) else path
+        base_name = self._clean_filename_base(path_obj.name)
+        return path_obj.parent / (base_name + new_ext)
 
     def _suggest_filename(self, persist: bool = False) -> None:
         """Update suggested filename when format changes"""
@@ -1437,8 +1487,21 @@ class ExportApp(Tk):
                 self.after(0, lambda: self.status_var.set("Analyzing project structure..."))
                 report = scan_project(self.folder_path)
 
-                if include:
+                # Apply content selection based on format and checkbox
+                format_info = self._format_from_name(fmt_name)
+                is_full_content_format = format_info and format_info.get('has_source_code', False)
+                
+                if is_full_content_format:
+                    # Full-content formats always include content, respect tree selection
+                    if selected_paths is not None:
+                        self._apply_content_selection(report, selected_paths)
+                    # If selected_paths is None, keep all content (no filtering)
+                elif include:
+                    # Analysis formats with content enabled, respect tree selection
                     self._apply_content_selection(report, selected_paths)
+                else:
+                    # Analysis formats with content disabled, remove all content
+                    self._apply_content_selection(report, set())
                 
                 # Use new export system
                 self.after(0, lambda: self.status_var.set("Converting to analysis format..."))
@@ -1452,7 +1515,12 @@ class ExportApp(Tk):
                     raise ValueError(f"Unknown format: {fmt_name}")
                 
                 exporter = exporter_class()
-                output = exporter.render(analysis.model_dump(), {})
+                # Prepare export options with project report and content inclusion flag
+                export_options = {
+                    'project_report': report,
+                    'include_content': include
+                }
+                output = exporter.render(analysis.model_dump(), export_options)
                 
                 # Write output
                 if isinstance(output, str):

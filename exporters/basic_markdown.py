@@ -19,6 +19,15 @@ class BasicMarkdownExporter(Exporter):
         """Render analysis as Markdown documentation."""
         project_analysis = ProjectAnalysis(**analysis)
         
+        # Check if content should be included
+        include_content = options.get('include_content', False)
+        project_report = options.get('project_report')
+        content_map = {}
+        
+        if include_content and project_report:
+            # Create a mapping of file paths to content
+            content_map = {f.path: f.content for f in project_report.files if f.content is not None}
+        
         lines = []
         
         # Header
@@ -26,6 +35,8 @@ class BasicMarkdownExporter(Exporter):
         lines.append("")
         lines.append(f"**Generated:** {project_analysis.generated_at.strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append(f"**Root:** {project_analysis.project.root_rel}")
+        if include_content:
+            lines.append(f"**Content:** Included")
         lines.append("")
         
         # Summary
@@ -120,6 +131,17 @@ class BasicMarkdownExporter(Exporter):
                 if file_info.complexity.hotspot > 0:
                     lines.append(f"- Hotspot score: {file_info.complexity.hotspot:.2f}")
                 lines.append("")
+            
+            # File content (if requested and available)
+            if include_content and file_info.path in content_map:
+                content = content_map[file_info.path]
+                if content and content.strip():
+                    lines.append("**Content:**")
+                    lines.append("")
+                    lines.append("```" + file_info.language)
+                    lines.append(content)
+                    lines.append("```")
+                    lines.append("")
             
             lines.append("---")
             lines.append("")

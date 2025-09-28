@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Any
 
 from .schema import (
     ProjectAnalysis, ProjectInfo, ProjectTotals, FileAnalysis,
@@ -28,7 +28,7 @@ class AnalysisEngine:
             'gtk': ['Gtk.Window', 'Gtk.Button', 'Gtk.Label', 'Gtk.Entry'],
         }
     
-    def analyze_project(self, project_report: ProjectReport, options: Dict[str, any] | None = None) -> ProjectAnalysis:
+    def analyze_project(self, project_report: ProjectReport, options: Dict[str, Any] | None = None) -> ProjectAnalysis:
         """Convert ProjectReport to ProjectAnalysis."""
         options = options or {}
         
@@ -74,7 +74,7 @@ class AnalysisEngine:
             graphs=ProjectGraphs(imports=import_graph)
         )
     
-    def _analyze_file(self, file_info: FileInfo, project_root: str, options: Dict[str, any] | None) -> FileAnalysis:
+    def _analyze_file(self, file_info: FileInfo, project_root: str, options: Dict[str, Any] | None) -> FileAnalysis:
         """Analyze a single file."""
         file_path = Path(project_root) / file_info.path
         
