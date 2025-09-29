@@ -31,6 +31,7 @@ class DeepAnalysisOptions:
     include_string_catalogue: bool = True
     include_binary_manifest: bool = True
     include_llm_bundle: bool = True
+    include_complexity_panel: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, bool] | None) -> "DeepAnalysisOptions":
@@ -84,8 +85,9 @@ class DeepFileAnalysis:
     strings: list[str]
     licence: str | None
     asset_meta: dict[str, str] | None
+    cyclomatic_complexity: int | None
     complexity: str
-    risk_score: float
+    risk_score: float | None
 
 
 @dataclass
@@ -468,7 +470,7 @@ def build_deep_analysis(
         strings: set[str] = set()
         licence: str | None = None
         asset_meta: dict[str, str] | None = None
-        complexity_score = 0
+        complexity_score: int | None = None
 
         if path.suffix.lower() == ".py" and text is not None:
             try:
@@ -522,7 +524,8 @@ def build_deep_analysis(
                             )
                         )
 
-                complexity_score = _compute_complexity(module_ast)
+                if options.include_complexity_panel:
+                    complexity_score = _compute_complexity(module_ast)
 
                 # TODO counts already captured; tests map
                 if options.include_tests:
@@ -590,7 +593,10 @@ def build_deep_analysis(
             }
             binary_manifest.append(asset_meta)
 
-        risk, risk_score = _risk_band(complexity_score, sloc, todo_count)
+        if complexity_score is not None:
+            risk, risk_score = _risk_band(complexity_score, sloc, todo_count)
+        else:
+            risk, risk_score = "not-computed", None
 
         file_card = DeepFileAnalysis(
             path=info.path,
@@ -616,6 +622,7 @@ def build_deep_analysis(
             strings=sorted(strings) if options.include_string_catalogue else [],
             licence=licence,
             asset_meta=asset_meta,
+            cyclomatic_complexity=complexity_score,
             complexity=risk,
             risk_score=risk_score,
         )
@@ -630,7 +637,8 @@ def build_deep_analysis(
                     "sloc": sloc,
                     "todo_count": todo_count,
                     "imports": sorted(imports),
-                    "complexity_band": risk,
+                    "complexity_band": risk if risk_score is not None else None,
+                    "cyclomatic_complexity": complexity_score,
                     "functions": [summary.signature for summary in functions] if options.include_functions else [],
                     "classes": [summary.signature for summary in classes] if options.include_classes else [],
                     "doc": file_card.constructs.get("docstring", [None])[0],

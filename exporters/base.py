@@ -34,6 +34,11 @@ class Exporter(ABC):
         """Whether this format is optimized for LLM consumption."""
         pass
 
+    def describe_options(self) -> dict[str, Any] | None:
+        """Return a schema describing configurable options for this exporter."""
+
+        return None
+
 
 class ExporterRegistry:
     """Registry for available exporters."""

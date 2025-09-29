@@ -7,12 +7,13 @@ from __future__ import annotations
 import threading
 import os
 from pathlib import Path
-from tkinter import Tk, filedialog, ttk, StringVar, BooleanVar, messagebox, IntVar
+from tkinter import Tk, filedialog, ttk, StringVar, BooleanVar, messagebox, IntVar, Canvas
 from typing import Optional
 
 from report import EXCLUDED_DIRS, ProjectReport, format_size
 from scan import scan_project, is_content_readable
 from exporters.base import ExporterRegistry
+from ui import OptionsRenderer
 from analysis import AnalysisEngine
 import subprocess
 import sys
@@ -94,6 +95,7 @@ class ExportApp(Tk):
         self.config = self.config_manager.load_config()
 
         self.title("🐍 Python Project Helper v2.0")
+        self.protocol("WM_DELETE_WINDOW", self.on_quit)
         
         # Configure modern styling
         style = ttk.Style(self)
@@ -240,6 +242,9 @@ class ExportApp(Tk):
         self.registry = ExporterRegistry()
         self.available_formats = self._get_available_formats()
         self.format_extensions = self._build_format_extensions()
+        self._options_cache: dict[str, dict[str, object]] = {}
+        self.active_format_name: str | None = None
+        self.option_renderer: OptionsRenderer | None = None
         self.deep_option_defaults: dict[str, bool] = {
             "include_functions": True,
             "include_classes": True,
@@ -253,6 +258,7 @@ class ExportApp(Tk):
             "include_string_catalogue": True,
             "include_binary_manifest": True,
             "include_llm_bundle": True,
+            "include_complexity_panel": True,
         }
         saved_deep_options = self.config_manager.get_deep_options()
         self.deep_option_vars: dict[str, BooleanVar] = {
@@ -265,6 +271,7 @@ class ExportApp(Tk):
         self._update_deep_controls_visibility()
         self._update_tree_enable_state()
         self._center_window()
+        self.on_format_changed()
         
         # Load last source folder if available
         if self.config.last_source_folder and Path(self.config.last_source_folder).exists():
@@ -297,7 +304,8 @@ class ExportApp(Tk):
             'llm-tds': '🤖 LLM Optimised - Compressed',
             'full-content-json': '📦 Complete JSON - With Source Code',
             'full-content-markdown': '📄 Complete Markdown - With Source Code',
-            'legacy-html': '🌐 Styled HTML - With Source Code'
+            'legacy-html': '🌐 Styled HTML - With Source Code',
+            'lrc-capsule': '🧊 LRC Capsule - Deterministic Bundle'
         }
         
         for name in self.registry.list_formats():
@@ -315,7 +323,7 @@ class ExportApp(Tk):
                     'mimetype': exporter.mimetype(),
                     'llm_friendly': exporter.is_llm_friendly(),
                     'lossless': exporter.is_lossless(),
-                    'has_source_code': name.startswith('full-content') or name == 'legacy-html'
+                    'has_source_code': name.startswith('full-content') or name in {'legacy-html', 'lrc-capsule'}
                 })
         return formats
 
@@ -360,9 +368,35 @@ class ExportApp(Tk):
     def _setup_ui(self) -> None:
         """Setup the complete user interface with modern design"""
         
-        # Create main container with modern styling
-        main_container = ttk.Frame(self, style="Card.TFrame")
-        main_container.pack(fill="both", expand=True, padx=20, pady=20)
+        # Create scrollable container so tall option panels remain accessible
+        scroll_wrapper = ttk.Frame(self)
+        scroll_wrapper.pack(fill="both", expand=True)
+
+        self._scroll_canvas = Canvas(scroll_wrapper, highlightthickness=0, bg="#ffffff")
+        self._scroll_canvas.pack(side="left", fill="both", expand=True)
+
+        scroll_y = ttk.Scrollbar(scroll_wrapper, orient="vertical", command=self._scroll_canvas.yview)
+        scroll_y.pack(side="right", fill="y")
+        self._scroll_canvas.configure(yscrollcommand=scroll_y.set)
+
+        # Main content lives inside the canvas window
+        main_container = ttk.Frame(self._scroll_canvas, style="Card.TFrame")
+        self._scroll_window_id = self._scroll_canvas.create_window((0, 0), window=main_container, anchor="nw")
+
+        def _configure_scroll_region(event=None) -> None:
+            self._scroll_canvas.configure(scrollregion=self._scroll_canvas.bbox("all"))
+
+        def _resize_canvas(event) -> None:
+            self._scroll_canvas.itemconfig(self._scroll_window_id, width=event.width)
+
+        main_container.bind("<Configure>", _configure_scroll_region)
+        self._scroll_canvas.bind("<Configure>", _resize_canvas)
+        self.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.bind_all("<Button-4>", self._on_mousewheel)
+        self.bind_all("<Button-5>", self._on_mousewheel)
+
+        # Apply padding inside the scrollable frame
+        main_container.configure(padding=20)
         
         # App header
         header_frame = ttk.Frame(main_container)
@@ -446,6 +480,12 @@ class ExportApp(Tk):
                                           font=("Helvetica", 10))
         self.format_description.pack(fill="x", pady=(8, 0))
 
+        # Placeholder for dynamically generated options
+        self.format_options_container = ttk.LabelFrame(options_inner, text="Format-specific options", padding=12)
+        self.format_options_container.columnconfigure(0, weight=1)
+        self.format_options_body = ttk.Frame(self.format_options_container)
+        self.format_options_body.grid(row=0, column=0, sticky="nsew")
+
         # Content inclusion option
         content_frame = ttk.Frame(options_inner)
         content_frame.pack(fill="x", pady=(0, 15))
@@ -479,6 +519,7 @@ class ExportApp(Tk):
             ("include_string_catalogue", "Include string catalogue"),
             ("include_binary_manifest", "Include asset manifest"),
             ("include_llm_bundle", "Include LLM bundle JSON"),
+            ("include_complexity_panel", "Include complexity & risk panel"),
         ]
         for idx, (key, label) in enumerate(deep_option_specs):
             variable = self.deep_option_vars[key]
@@ -1168,6 +1209,65 @@ class ExportApp(Tk):
             if self.deep_options_frame.winfo_manager():
                 self.deep_options_frame.pack_forget()
 
+    def _refresh_format_options(self, fmt_name: str | None) -> None:
+        """Rebuild the format-specific options pane."""
+        for child in self.format_options_body.winfo_children():
+            child.destroy()
+
+        self.option_renderer = None
+
+        if not fmt_name:
+            if self.format_options_container.winfo_manager():
+                self.format_options_container.pack_forget()
+            return
+
+        exporter_class = self.registry.get(fmt_name)
+        if not exporter_class:
+            if self.format_options_container.winfo_manager():
+                self.format_options_container.pack_forget()
+            return
+
+        exporter = exporter_class()
+        schema = exporter.describe_options()
+        if not schema:
+            if self.format_options_container.winfo_manager():
+                self.format_options_container.pack_forget()
+            return
+
+        initial = self._options_cache.get(fmt_name, {})
+        self.option_renderer = OptionsRenderer(self.format_options_body, schema, initial)
+        self.option_renderer.pack(fill="x", expand=True)
+        if not self.format_options_container.winfo_manager():
+            self.format_options_container.pack(fill="x", pady=(12, 0))
+
+    def _on_mousewheel(self, event) -> None:
+        """Scroll the main canvas when the mouse wheel is used."""
+
+        canvas = getattr(self, "_scroll_canvas", None)
+        if canvas is None:
+            return
+
+        if getattr(event, "num", None) == 4:  # Linux scroll up
+            canvas.yview_scroll(-1, "units")
+            return
+        if getattr(event, "num", None) == 5:  # Linux scroll down
+            canvas.yview_scroll(1, "units")
+            return
+
+        delta = getattr(event, "delta", 0)
+        if delta == 0:
+            return
+
+        if sys.platform == "darwin":
+            step = -int(delta)
+        else:
+            step = -int(delta / 120)
+
+        if step == 0:
+            step = -1 if delta > 0 else 1
+
+        canvas.yview_scroll(step, "units")
+
     def _apply_content_selection(self, report: ProjectReport, selected: set[str] | None) -> None:
         """Drop file contents that are not selected for inclusion."""
         if selected is None:
@@ -1246,6 +1346,9 @@ class ExportApp(Tk):
     def on_format_changed(self, event=None) -> None:
         """Handle format selection change"""
         fmt_name = self._format_name_from_display(self.fmt_var.get())
+        if self.option_renderer and self.active_format_name:
+            self._options_cache[self.active_format_name] = self.option_renderer.get_values()
+        self.active_format_name = fmt_name
         format_info = self._format_from_name(fmt_name) if fmt_name else None
         
         # Update format description
@@ -1255,7 +1358,8 @@ class ExportApp(Tk):
             'llm-tds': 'AI-optimised compressed format. 90% smaller, ideal for language models.',
             'full-content-json': 'Complete backup with all source code. Machine-readable, fully recoverable.',
             'full-content-markdown': 'Complete documentation with all source code. Human-readable, fully recoverable.',
-            'legacy-html': 'Styled web format with all source code. Beautiful for presentations and sharing.'
+            'legacy-html': 'Styled web format with all source code. Beautiful for presentations and sharing.',
+            'lrc-capsule': 'Privacy-aware bundle with deterministic compression and integrity metadata.'
         }
         
         if fmt_name:
@@ -1279,7 +1383,8 @@ class ExportApp(Tk):
             self.fmt_var.get(), 
             self.include_var.get()
         )
-        
+
+        self._refresh_format_options(fmt_name)
         if self.folder_path and self.save_path:
             # Update save path extension to match format
             self._suggest_filename(persist=True)
@@ -1470,6 +1575,11 @@ class ExportApp(Tk):
             messagebox.showerror("Invalid Format", "Please select a valid export format.")
             return
             
+        format_specific_options: dict[str, object] = {}
+        if self.option_renderer:
+            format_specific_options = self.option_renderer.get_values()
+            self._options_cache[fmt_name] = dict(format_specific_options)
+
         include = bool(self.include_var.get())
         selected_paths = self._get_selected_file_paths() if include else None
 
@@ -1516,10 +1626,11 @@ class ExportApp(Tk):
                 
                 exporter = exporter_class()
                 # Prepare export options with project report and content inclusion flag
-                export_options = {
+                export_options: dict[str, object] = {
                     'project_report': report,
                     'include_content': include
                 }
+                export_options.update(format_specific_options)
                 output = exporter.render(analysis.model_dump(), export_options)
                 
                 # Write output
@@ -1602,8 +1713,10 @@ class ExportApp(Tk):
         if self.export_running:
             if messagebox.askyesno("Export in Progress", 
                                  "An export is currently running. Quit anyway?"):
+                self._teardown_scroll_bindings()
                 self.destroy()
         else:
+            self._teardown_scroll_bindings()
             self.destroy()
 
     # ---- Helper Methods ----
@@ -1645,6 +1758,16 @@ class ExportApp(Tk):
             widget.configure(state=state)
         
         self._update_export_state()
+
+    def _teardown_scroll_bindings(self) -> None:
+        """Remove global scroll bindings before destroying the window."""
+
+        try:
+            self.unbind_all("<MouseWheel>")
+            self.unbind_all("<Button-4>")
+            self.unbind_all("<Button-5>")
+        except Exception:
+            pass
 
 def run_gui() -> None:
     """Launch the enhanced GUI application"""

@@ -1,501 +1,192 @@
-new plan:
-LRC: LLM-Ready Capsule (JSON spec) — Implementation Instructions
-Goal
-
-Add a new export format to the app: LRC (LLM-Ready Capsule) — a single JSON that is:
-
-Self-describing (header tells agents/LLMs what’s inside and how to read it),
-
-Dual-codec per section (lossless Tool codec and text-only LLM codec),
-
-Layered (summary → outline → compressed content),
-
-Safe & scoped (optional PII scrubbing + redaction notes),
-
-Deterministic (content hashes, stable IDs, Merkle-like integrity tree),
-
-Non-restorative disclaimer for the LLM codec.
-
-1) Project Integration
-
-Implement as a new export target:
-
-Module: outputs/lrc_capsule.py
-
-Public API:
-
-build_lrc_capsule(project_scan: ProjectScan, options: LRCCapsuleOptions) -> dict
-
-write_lrc_capsule(capsule: dict, path: Path) -> None
-
-CLI flag:
-
---export lrc (writes LRC_<project_name>_<ts>.json)
-
-App settings (optional UI): Exports ▸ LLM-Ready Capsule (LRC) with toggles below.
-
-2) JSON Top-Level Structure (stable order)
-
-All maps must be serialised with sorted keys, UTF-8, and \n newlines. Use stable sorting for arrays where applicable.
-
-{
-  "lrc_version": "1.0",
-  "generator": {
-    "app": "PythonProjectHelper",
-    "version": "<app_semver>",
-    "python": "<py_ver>",
-    "platform": "<os/arch>"
-  },
-  "created_at": "2025-09-28T09:41:00Z",
-  "project": {
-    "name": "<project_name>",
-    "root": "<abs_or_rel_root>",
-    "fingerprint": "<sha256(root_listing + sizes + mtimes)>"
-  },
-  "options": {
-    "include_patterns": ["**/*.py", ...],
-    "exclude_patterns": ["**/.venv/**", ...],
-    "pii_scrub": true,
-    "redact_ruleset": "default|custom",
-    "normalise_eol": "LF",
-    "deterministic_seed": 0
-  },
-  "integrity": {
-    "algo": "sha256",
-    "tree": {
-      "type": "merkle_v1",
-      "files": { "<file_id>": "<sha256(raw_bytes)>" },
-      "nodes": { "<node_id>": "<sha256(child_hashes_concat)>" },
-      "root": "<sha256(top_level_concat)>"
-    }
-  },
-  "summary": {
-    "stats": { "files": 123, "bytes": 456789, "languages": {"python": 98, "text": 25} },
-    "highlights": ["Found 4 entrypoints", "3 config files", "..."]
-  },
-  "sections": [
-    {
-      "id": "sec-0001",
-      "kind": "code|text|data|binary",
-      "path": "src/pkg/module.py",
-      "language": "python",
-      "size_bytes": 1234,
-      "hash": "sha256:...",
-      "redactions": [
-        {"rule": "email", "range": [123, 137], "note": "redacted email"}
-      ],
-      "codecs": {
-        "tool": {
-          "codec": "zstd_b64|brotli_b64",
-          "payload": "<base64>",
-          "original_mimetype": "text/x-python"
-        },
-        "llm": {
-          "layers": {
-            "summary": { "lines": ["Module X provides ...", "Key classes: A, B"] },
-            "outline": {
-              "codec": "ast_norm_v1|text_norm_v1",
-              "payload": { /* structure, see below */ }
-            },
-            "content": {
-              "codec": "tds_v1",
-              "dict": { "§1": "import ", "§2": "def ", ... },
-              "payload": "§1os\n§1sys\n... (normalised text with tokens)"
-            }
-          },
-          "disclaimer": "LLM codec is not guaranteed to reconstruct original content."
-        }
-      }
-    }
-  ]
-}
+here’s a concrete plan to (a) make the GUI friendlier and more powerful, and (b) expose the rich option set you already have under the hood.
 
-JSON Schema (concise)
+1) “Export Centre” panel (single place to run everything)
 
-Create schemas/lrc_v1.schema.json and validate before writing:
+Formats list (auto-discovered): Populate from exporters registry so the UI never hard-codes formats.
 
-lrc_version: enum ["1.0"]
+Use: list_available_formats(), get_llm_formats(), get_lossless_formats() to label items with badges like LLM-friendly / Lossless. 
 
-generator.*: strings
+PythonProjectHelper_report
 
-integrity.algo: "sha256"
+Right-hand options drawer: When a format is selected, show its specific options (more below).
 
-integrity.tree.{files,nodes}: object<string,string>, hex SHA-256
+Run controls: Dry-run preview, Export, Open folder, with progress + log.
 
-sections[*].id: ^sec-\d{4,}$
+Result row: show output path, size, mimetype, and a copy path button.
 
-sections[*].codecs.tool.codec: enum ["zstd_b64","brotli_b64"]
+2) Schema-driven options (stop hand-wiring widgets)
 
-sections[*].codecs.llm.layers.outline.codec: enum ["ast_norm_v1","text_norm_v1"]
+Expose options by generating the controls from your dataclasses (and reuse across CLI/UI):
 
-sections[*].codecs.llm.layers.content.codec: "tds_v1"
+Add lightweight metadata to each dataclass field (label, help, group, widget type, choices, default, validators).
+Example targets from your current plan/spec:
 
-3) Determinism Rules
+LRCCapsuleOptions: patterns_include, patterns_exclude, tool_codec (zstd_b64|brotli_b64), enable_llm_layers, enable_ast_outline, pii_scrub, redact_ruleset (default|strict|off), deterministic_seed, normalise_eol (LF|KEEP). 
 
-Ordering: Sort files by (kind, path). Sort dict keys lexicographically.
+PythonProjectHelper_report
 
-Timestamps: Use ISO-8601 Z (UTC). For fingerprinting, exclude volatile metadata.
+Auto-UI builder: reflect the dataclass → choose widget:
 
-Hashing: Always SHA-256 of pre-normalised bytes:
+Literal[...] → dropdown
 
-For text: normalise line endings to \n, strip trailing spaces if options.normalise_eol=="LF".
+bool → switch
 
-For binaries: hash raw bytes.
+list[str] → tokenised entry with add/remove buttons
 
-IDs:
+int/float → spinbox with min/max
 
-section.id: sec- + zero-padded index (start at 0001).
+patterns_* → multi-line textbox plus a Test glob… button
 
-node_id: n- + stable counter during tree build.
+Validation & help: per-field inline errors and hover tooltips from metadata.
 
-Randomness: Where a tie-break is needed (e.g., token assignment), use deterministic_seed.
+Profiles: save/load Option Profiles (JSON) that capture the entire option set for a format; pin favourites to the Export Centre.
 
-4) Codecs
-4.1 Tool codecs (lossless)
+This keeps the GUI in lockstep with your dataclasses and options used by the CLI steps (e.g., --include, --exclude, --pii-scrub, --tool-codec, etc.). 
 
-zstd_b64: compress with zstd level 10 (tunable), then base64 encode (URL-safe false, standard alphabet).
+PythonProjectHelper_report
 
-brotli_b64: Brotli quality 6 (tunable), then base64.
+3) Format-specific pages (example: LRC Capsule)
 
-Implement:
+LRC has multiple toggles and a clear flow; give it a first-class sub-page:
 
-def to_tool_codec(data: bytes, codec: Literal["zstd_b64","brotli_b64"]) -> str: ...
-def from_tool_codec(b64: str, codec: Literal["zstd_b64","brotli_b64"]) -> bytes: ...
+Sections: File selection, Safety, Codecs & Layers, Determinism, Integrity.
 
-4.2 LLM codecs (text-only)
-a) tds_v1 — Token Dictionary Substitution
+Safety: pii_scrub, redact_ruleset with an info box explaining the privacy trade-offs.
 
-Purpose: shrink textual payload while keeping structure readable.
+Layers: switches for enable_llm_layers, enable_ast_outline, enable_tds with one-line summaries of size/quality impacts.
 
-Algorithm:
+Determinism: deterministic_seed, normalise_eol (explain reproducibility).
 
-Pre-normalise text (EOL \n, optional whitespace compaction preserving indentation).
+Integrity: read-only note that a Merkle tree is included; checkbox to show integrity preview post-export. 
 
-Candidate extraction:
+PythonProjectHelper_report
 
-Collect frequent substrings: identifiers, imports, keywords, common punctuation clusters, file-local boilerplate.
+Dry-run preview: show what would be included (counts, example matches from include/exclude, redaction rules summary).
 
-Use a deterministic greedy BPE-like approach:
+One-click presets: LLM-compact, LLM-max context, Archival w/ lossless tool-codec.
 
-Start from frequent bigrams/trigrams.
+4) Menus & navigation tidy-up (Tk/ttk)
 
-Limit dictionary size: default 512 entries.
+Top menu:
 
-Minimum tokenised gain threshold: ≥ 2 bytes saved per entry.
+File → Open Project, Recent Projects, Export…
 
-Token assignment: map in order of frequency to §1, §2, … §512. (§ is U+00A7; ensure it does not exist in source; otherwise choose fallback token prefix ⟦n⟧.)
+Edit → Preferences, Reset UI Layout
 
-Substitution: longest-match replace (left-to-right), preserving line breaks and block boundaries.
+View → Export Centre, Analysis Summary, Logs
 
-Output: dict (token→string) and payload (tokenised text).
+Tools → Validate Patterns, Benchmark Export, Clear Cache
 
-Determinism:
+Left sidebar: Project browser (tree) + quick filters (code, configs, docs).
 
-Sort candidates by (gain desc, lex asc), seeded tie-breaks.
+Main content tabs: Export Centre, Analysis Summary, Call/Dependency maps, Settings.
 
-Don’t cross line breaks in tokens.
+Status bar: current project, PythonProjectHelper version, scan status.
 
-b) ast_norm_v1 — AST-normalised code outline
+(Your PyInstaller spec shows Tkinter/ttk packaging, so this fits neatly.) 
 
-Python initial target; provide language hooks.
+PythonProjectHelper_report
 
-Output structure:
+5) Make formats truly pluggable in the GUI
 
-{
-  "module": "pkg.module",
-  "imports": ["os", "sys", "from pathlib import Path as Path"],
-  "symbols": {
-    "classes": [
-      {"name": "Foo", "bases": ["Bar"], "doc": "doc...", "methods": ["__init__", "run"]}
-    ],
-    "functions": [
-      {"name": "do_thing", "params": ["x:int","y:str='a'"], "doc": "doc..."}
-    ],
-    "constants": ["VERSION", "DEFAULTS"]
-  },
-  "calls": [
-    {"caller": "Foo.run", "callee": "helper.process"},
-    {"caller": "do_thing", "callee": "json.loads"}
-  ],
-  "top_order": ["imports", "constants", "classes", "functions"]
-}
+You already have a clean exporter interface + registry; let the GUI consume it:
 
+At startup, query registry → formats list.
 
-Implementation (Python):
+For each exporter, ask for an options schema (add a tiny describe_options() method or a module-level JSON schema alongside the exporter).
 
-Use ast to parse; walk nodes to collect:
+Render widgets from schema, then pass a dict to render(analysis, options) when running the export. 
 
-Imports (incl. aliases),
+PythonProjectHelper_report
 
-Class defs (names, bases, method names, docstrings),
+6) Expose more options without clutter (“Progressive disclosure”)
 
-Function defs (name, signature, docstring),
+Basic / Advanced switch in every panel.
 
-Simple module-level assignments as constants (heuristic: ALL_CAPS or literal values).
+Basic shows the 6–8 most common toggles (profiles decide which).
 
-Optional call graph:
+Advanced reveals the full generated set (from dataclass/schema).
 
-Within module, collect ast.Call targets; derive qualname if resolvable locally.
+Inline search (“type to filter options”).
 
-Preserve declaration order in top_order.
+Dependency hints (e.g., enabling AST outline disables content TDS if not applicable).
 
-Language extension points:
+Per-format learn-more footers linking to docs or your “new_plan.md” notes (useful for LRC explanation). 
 
-ast_norm_v1_python.py
+PythonProjectHelper_report
 
-Future: ast_norm_v1_js.ts, ast_norm_v1_go.go (leave stubs; emit "language":"python").
+7) Safer defaults and guard-rails (clarify what’s shared)
 
-c) text_norm_v1 — documents
+Your report content distinguishes analysis-only vs full-content exports. Reflect this in UI copy:
 
-For Markdown/Plaintext:
+Badges & warnings:
 
-Extract heading hierarchy, bullet lists, numbered steps.
+Analysis only → “safe to share; no source code exposed”
 
-Emit:
+Full content → “contains full code; review before sharing”
 
-{
-  "headings":[{"level":1,"text":"Title"},...],
-  "bullets":[["point A","subpoint"],...],
-  "entities":{"urls":["..."],"emails":["..."]}
-}
+Confirmation modal before full-content export. 
 
-d) diff_v1 — versioned runs (optional for now)
+PythonProjectHelper_report
 
-If previous LRC is provided, add per-file semantic diff:
+8) Fast feedback loops
 
-Code: AST-aware (added/removed/changed symbols),
+Preview panel per format (JSON/Markdown/txt). Show first 2–3 KB and a Save preview button.
 
-Text: heading and paragraph diffs,
+Performance estimates: small line under the Export button (“est. size/time based on last run”).
 
-Fallback: unified diff.
+Logs tab with copy-to-clipboard and Include logs in bug report.
 
-5) PII Scrubbing & Redaction
+9) Preferences (global)
 
-Pipeline (per section before hashing/encoding):
+Default export folder, remember last project, telemetry/log level, theme (light/dark/CTk-style), concurrency.
 
-Detect: email, phone, API keys, secrets, IPs, local paths (heuristics + regex set).
+Profiles location (folder where .json profiles are stored).
 
-Redact: replace with «REDACTED:<type>» preserving length if preserve_len=True.
+Reset to sensible defaults button.
 
-Annotate: append entry to section.redactions.
+10) CLI ↔ GUI parity
 
-Hashing:
+Everything you expose in the GUI should map 1:1 to CLI flags for headless use (your LRC CLI sketch already outlines flags like --include, --exclude, --pii-scrub, --tool-codec). Keep names identical to reduce cognitive load. 
 
-hash field is of pre-redaction or post-redaction?
+PythonProjectHelper_report
 
-Design choice: set hash to post-redaction bytes (what the capsule actually contains). Add original_hash if options.pii_scrub==true.
+Implementation notes (quick start for Codex)
 
-Integrity tree must use the stored content (post-redaction).
+Add a tiny “options schema” helper
 
-Expose options:
+For each dataclass (e.g., LRCCapsuleOptions), provide a to_schema() that returns a JSON-serialisable structure with fields, types, choices, defaults, help text → the GUI builder consumes that. 
 
-@dataclass(frozen=True)
-class LRCCapsuleOptions:
-    patterns_include: list[str]
-    patterns_exclude: list[str]
-    tool_codec: Literal["zstd_b64","brotli_b64"] = "zstd_b64"
-    enable_llm_layers: bool = True
-    enable_ast_outline: bool = True
-    enable_tds: bool = True
-    pii_scrub: bool = True
-    redact_ruleset: Literal["default","strict","off"] = "default"
-    deterministic_seed: int = 0
-    normalise_eol: Literal["LF","KEEP"] = "LF"
+PythonProjectHelper_report
 
-6) Integrity: Merkle-like Tree
+GUI builder
 
-Leaf: each section’s tool codec payload decoded bytes (i.e., the exact stored content) → sha256.
+Create ui/options_renderer.py that takes the schema and returns a Tk/ttk frame of widgets bound to a dict (StringVar/IntVar/BooleanVar), plus validation callbacks.
 
-Intermediate nodes: concatenate child hashes in sorted order, sha256.
+Export Centre
 
-Root: concat of top node hashes (sorted by section.id).
+ui/export_center.py
 
-Store per-file hashes in integrity.tree.files, node hashes in integrity.tree.nodes, and the final "root".
+Gets format names via list_available_formats(); badges from get_llm_formats() and get_lossless_formats().
 
-Helper:
+On select → options_renderer for that exporter’s schema; on run → call exporter’s render(). 
 
-class MerkleBuilder:
-    def add_leaf(section_id: str, leaf_hash: bytes) -> None: ...
-    def build() -> tuple[root_hex: str, nodes: dict[str,str]]
+PythonProjectHelper_report
 
-7) Layering
+Profiles
 
-For each section (sections[*].codecs.llm.layers):
+profiles/ directory with {format_name}/*.json.
 
-summary: 1–5 lines. Keep ≤ 400 chars.
+Buttons: Save Profile, Load Profile, Set as Default.
 
-outline: ast_norm_v1 (code) or text_norm_v1 (docs).
+Attach to the same dict used by options_renderer so state round-trips cleanly.
 
-content: tds_v1 tokenised text (skip for binaries).
+Dry-run & Preview
 
-Stop-early behaviour: consumers can read only summary, or summary+outline, etc., to fit token budgets.
+Wire a Dry-run button that executes the path/selection logic but stops before serialising; show counts, example matched files, and a short preview (if the exporter supports render_preview(); otherwise show a generated summary).
 
-8) Non-Restorative Disclaimer
+Warnings
 
-Add verbatim in each LLM codec:
+When a format’s is_lossless() is true, show a privacy warning (full content likely included in your FullContent exporters). 
 
-LLM codec is not guaranteed to reconstruct original content and may be lossy by design.
-
-9) API & CLI
-Library
-def build_lrc_capsule(scan: ProjectScan, options: LRCCapsuleOptions) -> dict:
-    # 1) gather files from scan according to patterns
-    # 2) for each file: load bytes, normalise, optional redact
-    # 3) compute hashes, build tool codec payload
-    # 4) build LLM layers as applicable
-    # 5) accumulate sections and build integrity tree
-    # 6) return dict ready for JSON dump (ensure sorted keys)
-
-def write_lrc_capsule(capsule: dict, path: Path) -> None:
-    json.dump(capsule, fp, ensure_ascii=False, sort_keys=True, indent=2)
-
-CLI
-
-python -m project_helper --export lrc --include "**/*.py" --exclude "**/.venv/**" --pii-scrub on --tool-codec zstd_b64
-
-10) Testing & Acceptance Criteria
-Unit Tests
-
-Determinism: two runs on same tree produce identical JSON bytes.
-
-Hashing: known file → expected SHA-256 (post-redaction).
-
-TDS: dictionary ≤ limit; token payload round-trips when dictionary is reapplied.
-
-AST: for sample module, parsed outline matches expected fixtures.
-
-Integrity Tree: leaf and root hashes match recomputation.
-
-Integration Tests
-
-Generate LRC for a small mixed project (py, md, json). Verify:
-
-Sorted keys, LF endings,
-
-summary.stats counts correct,
-
-redactions populated if secrets present,
-
-disclaimer present.
-
-Fuzz/Edge
-
-Empty files, huge single-line files, binary blobs.
-
-Source containing § — ensure prefix fallback triggers.
-
-11) Example (truncated)
-{
-  "lrc_version": "1.0",
-  "generator": {"app":"PythonProjectHelper","version":"0.9.0","python":"3.11.9","platform":"macOS-arm64"},
-  "created_at": "2025-09-28T09:41:00Z",
-  "project": {"name":"AudioTyper_tk","root":"./","fingerprint":"c7e1..."},
-  "options": {"pii_scrub": true, "redact_ruleset": "default", "deterministic_seed": 0, "normalise_eol": "LF"},
-  "integrity": {
-    "algo":"sha256",
-    "tree":{
-      "type":"merkle_v1",
-      "files": {"sec-0001":"b5d4...", "sec-0002":"9af3..."},
-      "nodes": {"n-0001":"1ab2...", "n-0002":"77cc..."},
-      "root":"f0f0..."
-    }
-  },
-  "summary":{"stats":{"files":42,"bytes":123456,"languages":{"python":39,"text":3}},"highlights":["Entrypoint: main.py"]},
-  "sections":[
-    {
-      "id":"sec-0001",
-      "kind":"code",
-      "path":"src/app/main.py",
-      "language":"python",
-      "size_bytes":2843,
-      "hash":"sha256:3b1a...",
-      "redactions":[{"rule":"email","range":[211,232],"note":"redacted email"}],
-      "codecs":{
-        "tool":{"codec":"zstd_b64","payload":"KLUv/QC...","original_mimetype":"text/x-python"},
-        "llm":{
-          "layers":{
-            "summary":{"lines":["Entrypoint CLI; config load; GUI bootstrap"]},
-            "outline":{
-              "codec":"ast_norm_v1",
-              "payload":{
-                "module":"app.main",
-                "imports":["sys","os","from gui import App"],
-                "symbols":{"classes":[],"functions":[{"name":"main","params":[],"doc":"Start app"}],"constants":["VERSION"]},
-                "calls":[{"caller":"main","callee":"App.run"}],
-                "top_order":["imports","constants","functions"]
-              }
-            },
-            "content":{
-              "codec":"tds_v1",
-              "dict":{"§1":"import ","§2":"def ","§3":"from ","§4":" as "},
-              "payload":"§1sys\n§1os\n§3gui §4 App\n§2main():\n    App.run()\n"
-            }
-          },
-          "disclaimer":"LLM codec is not guaranteed to reconstruct original content."
-        }
-      }
-    }
-  ]
-}
-
-12) Performance Notes
-
-Stream processing for large files; avoid loading entire tree into RAM.
-
-Cap tds_v1 dictionary to 512 entries and payload size to 2 MB per section (configurable).
-
-Provide --no-llm-content to emit only summaries+outlines for huge repos.
-
-13) Security Notes
-
-Never store raw secrets. Default rules: emails, phone numbers, JWTs, AWS keys, generic key=..., .pem blocks.
-
-Redaction replaces value, keeps structure.
-
-Include redactions with byte ranges (post-normalisation offsets).
-
-14) Backwards Compatibility & Versioning
-
-lrc_version governs schema evolution.
-
-For breaking changes, bump to 2.0 and include "compat":{"reads":["1.x"]} if possible.
-
-Keep codec names stable; add new codecs with new identifiers (tds_v2, ast_norm_v2).
-
-15) Tasks for Copilot
-
-Create module outputs/lrc_capsule.py with APIs above.
-
-Implement tool codecs using zstandard and brotli libs; add fallback if unavailable.
-
-Implement PII scrubbing (redact.py) with composable regex rules; unit tests.
-
-Implement tds_v1 (deterministic greedy BPE-like), respecting dictionary cap & ties.
-
-Implement ast_norm_v1 (Python) using ast and inspect.signature rendering.
-
-Implement text_norm_v1 for Markdown/plain text.
-
-Build Merkle tree helper and integrate into integrity.
-
-Add JSON schema + validation step.
-
-Wire up CLI flag and settings panel toggle.
-
-Write unit/integration tests and golden fixtures.
-
-Update docs: docs/exports_lrc.md with consumer examples.
-
-16) Acceptance Criteria
-
-Export produces a single JSON file that validates against schemas/lrc_v1.schema.json.
-
-Re-export with same inputs yields byte-identical output.
-
-Tool codec round-trips losslessly (decode(encode(data)) == data).
-
-LLM codec layers present, summaries concise, outlines accurate, TDS dictionary ≤ 512.
-
-Integrity root hash recomputes successfully from stored payloads.
-
-When pii_scrub=true, secrets are redacted and recorded in redactions.
+PythonProjectHelper_report

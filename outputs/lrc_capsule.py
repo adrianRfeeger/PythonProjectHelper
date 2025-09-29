@@ -9,12 +9,13 @@ import platform
 import re
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
 from report import ProjectReport, FileInfo
+from options.schema import dataclass_to_schema
 
 _WORD_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 
@@ -23,18 +24,147 @@ _WORD_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 class LRCCapsuleOptions:
     """Options controlling capsule construction."""
 
-    include_patterns: tuple[str, ...] = ("**",)
-    exclude_patterns: tuple[str, ...] = ("**/.venv/**", "**/__pycache__/**", "**/.git/**")
-    pii_scrub: bool = True
-    redact_ruleset: str = "default"
-    normalise_eol: str = "LF"
-    deterministic_seed: int = 0
-    dictionary_size: int = 256  # Reduced from 512
-    tool_codec: str = "zstd_b64"
-    max_file_size: int = 1024 * 1024  # Skip files larger than 1MB
-    include_binary_files: bool = False  # Skip binary files by default
-    max_summary_lines: int = 3  # Reduced from 5
-    max_outline_items: int = 10  # Limit outline complexity
+    include_patterns: tuple[str, ...] = field(
+        default=("**",),
+        metadata={
+            "ui": {
+                "label": "Include patterns",
+                "help": "Glob patterns to include in the capsule.",
+                "widget": "pattern-list",
+                "group": "Filters",
+            }
+        },
+    )
+    exclude_patterns: tuple[str, ...] = field(
+        default=("**/.venv/**", "**/__pycache__/**", "**/.git/**"),
+        metadata={
+            "ui": {
+                "label": "Exclude patterns",
+                "help": "Glob patterns to exclude from the capsule.",
+                "widget": "pattern-list",
+                "group": "Filters",
+            }
+        },
+    )
+    pii_scrub: bool = field(
+        default=True,
+        metadata={"ui": {"label": "PII scrub", "help": "Remove obvious personally identifiable information.", "group": "Safety"}},
+    )
+    redact_ruleset: str = field(
+        default="default",
+        metadata={
+            "ui": {
+                "label": "Redaction ruleset",
+                "help": "Preset determining how aggressively to redact sensitive content.",
+                "choices": ["default", "strict", "off"],
+                "widget": "select",
+                "group": "Safety",
+            }
+        },
+    )
+    normalise_eol: str = field(
+        default="LF",
+        metadata={
+            "ui": {
+                "label": "Normalise line endings",
+                "choices": ["LF", "KEEP"],
+                "widget": "select",
+                "help": "Convert line endings to LF or preserve originals.",
+                "group": "Determinism",
+            }
+        },
+    )
+    deterministic_seed: int = field(
+        default=0,
+        metadata={
+            "ui": {
+                "label": "Deterministic seed",
+                "help": "Seed value to keep compression and ordering deterministic.",
+                "widget": "number",
+                "group": "Determinism",
+            }
+        },
+    )
+    dictionary_size: int = field(
+        default=256,
+        metadata={
+            "ui": {
+                "label": "Dictionary size",
+                "help": "Number of tokens to retain in the compression dictionary.",
+                "widget": "number",
+                "min": 32,
+                "max": 1024,
+                "group": "Codecs & Layers",
+            }
+        },
+    )  # Reduced from 512
+    tool_codec: str = field(
+        default="zstd_b64",
+        metadata={
+            "ui": {
+                "label": "Tool codec",
+                "choices": ["zstd_b64", "brotli_b64", "none"],
+                "widget": "select",
+                "help": "Compression codec used for tool-facing payloads.",
+                "group": "Codecs & Layers",
+            }
+        },
+    )
+    max_file_size: int = field(
+        default=1024 * 1024,
+        metadata={
+            "ui": {
+                "label": "Max file size (bytes)",
+                "widget": "number",
+                "min": 1024,
+                "step": 1024,
+                "help": "Skip files larger than this threshold to keep capsules small.",
+                "group": "Filters",
+            }
+        },
+    )  # Skip files larger than 1MB
+    include_binary_files: bool = field(
+        default=False,
+        metadata={
+            "ui": {
+                "label": "Include binary files",
+                "help": "Include recognised binary assets alongside text files.",
+                "group": "Filters",
+            }
+        },
+    )  # Skip binary files by default
+    max_summary_lines: int = field(
+        default=3,
+        metadata={
+            "ui": {
+                "label": "Max summary lines",
+                "widget": "number",
+                "min": 1,
+                "max": 10,
+                "help": "Upper bound on lines in each summary chunk.",
+                "group": "LLM Layers",
+            }
+        },
+    )  # Reduced from 5
+    max_outline_items: int = field(
+        default=10,
+        metadata={
+            "ui": {
+                "label": "Max outline items",
+                "widget": "number",
+                "min": 3,
+                "max": 40,
+                "help": "Limit the depth of the generated outline per file.",
+                "group": "LLM Layers",
+            }
+        },
+    )  # Limit outline complexity
+
+    @classmethod
+    def schema(cls) -> dict[str, object]:
+        """Return a serialisable description of UI metadata for this options set."""
+
+        return dataclass_to_schema(cls)
 
 
 def build_compact_lrc_capsule(project_scan: ProjectReport) -> dict:

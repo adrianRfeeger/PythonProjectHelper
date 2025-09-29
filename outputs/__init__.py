@@ -404,7 +404,23 @@ def render_deep_markdown(deep_report: DeepAnalysisReport) -> str:
                 f"- Size: {format_size(file_card.size_bytes)} | SLOC: {file_card.sloc}",
                 f"- Modified: {file_card.mtime_iso}",
                 f"- Responsibility: {file_card.responsibility or '—'}",
-                f"- Complexity: {file_card.complexity} (score {file_card.risk_score:.1f})",
+            ]
+        )
+
+        complexity_line = "- Complexity: "
+        if file_card.risk_score is not None:
+            complexity_line += f"{file_card.complexity} (score {file_card.risk_score:.1f})"
+        elif file_card.complexity and file_card.complexity != "not-computed":
+            complexity_line += file_card.complexity
+        else:
+            complexity_line += "not computed"
+        lines.append(complexity_line)
+
+        if file_card.cyclomatic_complexity is not None:
+            lines.append(f"- Cyclomatic complexity: {file_card.cyclomatic_complexity}")
+
+        lines.extend(
+            [
                 f"- TODO markers: {file_card.todo_count}",
             ]
         )

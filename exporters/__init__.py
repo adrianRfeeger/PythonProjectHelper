@@ -10,6 +10,7 @@ from .basic_markdown import BasicMarkdownExporter
 from .full_content_json import FullContentJSONExporter
 from .full_content_markdown import FullContentMarkdownExporter
 from .legacy_html import LegacyHTMLExporter
+from .lrc_capsule import LRCCapsuleExporter
 
 # Export main classes and functions
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     'FullContentJSONExporter',
     'FullContentMarkdownExporter',
     'LegacyHTMLExporter',
+    'LRCCapsuleExporter',
 ]
 
 
